@@ -2,7 +2,7 @@
  * Step: groups — Connect to WhatsApp, fetch group metadata, write to DB.
  * Replaces 05-sync-groups.sh + 05b-list-groups.sh
  */
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -85,7 +85,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
   let syncOk = false;
   try {
     const syncScript = `
-import makeWASocket, { useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers, fetchLatestWaWebVersion } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import path from 'path';
 import fs from 'fs';
@@ -110,7 +110,9 @@ const upsert = db.prepare(
 
 const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
+const { version } = await fetchLatestWaWebVersion({}).catch(() => ({ version: undefined }));
 const sock = makeWASocket({
+  version,
   auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
   printQRInTerminal: false,
   logger,
@@ -124,6 +126,7 @@ const timeout = setTimeout(() => {
 
 sock.ev.on('creds.update', saveCreds);
 
+let synced = false;
 sock.ev.on('connection.update', async (update) => {
   if (update.connection === 'open') {
     try {
@@ -136,6 +139,7 @@ sock.ev.on('connection.update', async (update) => {
           count++;
         }
       }
+      synced = true;
       console.log('SYNCED:' + count);
     } catch (err) {
       console.error('FETCH_ERROR:' + err.message);
@@ -145,7 +149,7 @@ sock.ev.on('connection.update', async (update) => {
       db.close();
       process.exit(0);
     }
-  } else if (update.connection === 'close') {
+  } else if (update.connection === 'close' && !synced) {
     clearTimeout(timeout);
     console.error('CONNECTION_CLOSED');
     process.exit(1);
@@ -153,7 +157,7 @@ sock.ev.on('connection.update', async (update) => {
 });
 `;
 
-    const output = execSync(`node --input-type=module -e ${JSON.stringify(syncScript)}`, {
+    const output = execFileSync('node', ['--input-type=module', '-e', syncScript], {
       cwd: projectRoot,
       encoding: 'utf-8',
       timeout: 45000,
