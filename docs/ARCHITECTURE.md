@@ -132,6 +132,7 @@ graph LR
         IP["data/ipc/{folder}/"]
         AR["data/sessions/{folder}/agent-runner-src/"]
         GM["~/.gmail-mcp/"]
+        GC["~/.gcal-mcp/"]
         EX["~/projects/"]
     end
 
@@ -140,6 +141,7 @@ graph LR
         WG["/workspace/group (rw)"]
         HC["/home/node/.claude (rw)"]
         HGM["/home/node/.gmail-mcp (rw)"]
+        HGC["/home/node/.gcal-mcp (rw)"]
         WI["/workspace/ipc (rw)"]
         AS["/app/src (rw)"]
     end
@@ -149,6 +151,7 @@ graph LR
         WGL["/workspace/global (ro)"]
         HC2["/home/node/.claude (rw)"]
         HGM2["/home/node/.gmail-mcp (rw)"]
+        HGC2["/home/node/.gcal-mcp (rw)"]
         WI2["/workspace/ipc (rw)"]
         AS2["/app/src (rw)"]
         WE["/workspace/extra/projects (varies)"]
@@ -158,6 +161,7 @@ graph LR
     GF -->|rw| WG
     SS -->|rw| HC
     GM -->|rw| HGM
+    GC -->|rw| HGC
     IP -->|rw| WI
     AR -->|rw| AS
 
@@ -165,6 +169,7 @@ graph LR
     GL -->|ro| WGL
     SS -->|rw| HC2
     GM -->|rw| HGM2
+    GC -->|rw| HGC2
     IP -->|rw| WI2
     AR -->|rw| AS2
     EX -->|validated| WE
@@ -181,6 +186,7 @@ graph LR
 | `/workspace/ipc` | Isolated IPC (rw) | Isolated IPC (rw) |
 | `/app/src` | Agent runner source (rw) | Agent runner source (rw) |
 | `/home/node/.gmail-mcp` | `~/.gmail-mcp` (rw, conditional) | `~/.gmail-mcp` (rw, conditional) |
+| `/home/node/.gcal-mcp` | `~/.gcal-mcp` (rw, conditional) | `~/.gcal-mcp` (rw, conditional) |
 | `/workspace/extra/*` | Via allowlist | Via allowlist (forced ro if `nonMainReadOnly`) |
 
 ### Security Layers
@@ -228,7 +234,7 @@ Secrets (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) follow a strict path:
 4. **Agent SDK**: Set in the SDK `env` option, not in `process.env`
 5. **Bash tool**: Pre-tool-use hook injects `unset` commands to strip credentials before any shell execution
 
-**Gmail OAuth credentials** follow a separate path — they're stored at `~/.gmail-mcp/` on the host and bind-mounted (read-write) into every container at `/home/node/.gmail-mcp/`. The Gmail MCP server reads these directly and may refresh tokens in-place. The mount is conditional: only added if `~/.gmail-mcp/` exists on the host.
+**Google API OAuth credentials** (Gmail, Calendar) follow a separate path — each service stores credentials in its own host directory (`~/.gmail-mcp/`, `~/.gcal-mcp/`) which is bind-mounted (read-write) into every container. The MCP servers read these directly and may refresh tokens in-place. Mounts are conditional: only added if the directory exists on the host. Both services share the same GCP OAuth client ID but maintain separate tokens with different scopes.
 
 ---
 
@@ -243,6 +249,7 @@ graph TB
         SDK[Claude Agent SDK]
         MCP[IPC MCP Server<br/>stdio transport]
         GMAIL_MCP[Gmail MCP Server<br/>@gongrzhe/server-gmail-autoauth-mcp]
+        GCAL_MCP[Calendar MCP Server<br/>@cocal/google-calendar-mcp]
 
         subgraph "Available Tools"
             BASH[Bash]
@@ -253,6 +260,7 @@ graph TB
             SKILL[Skill / TodoWrite]
             NCMCP["mcp__nanoclaw__*"]
             GMCP["mcp__gmail__*"]
+            GCMCP["mcp__google-calendar__*"]
             AB[agent-browser<br/>CLI + Chromium]
         end
     end
@@ -265,12 +273,15 @@ graph TB
     SDK -->|tools| WEB
     SDK -->|tools| NCMCP
     SDK -->|tools| GMCP
+    SDK -->|tools| GCMCP
     NCMCP -->|stdio| MCP
     GMCP -->|stdio| GMAIL_MCP
+    GCMCP -->|stdio| GCAL_MCP
 
     MCP -->|write file| IPC_MSG["/workspace/ipc/messages/*.json"]
     MCP -->|write file| IPC_TASK["/workspace/ipc/tasks/*.json"]
-    GMAIL_MCP -->|OAuth| GMAIL_API["Gmail API"]
+    GMAIL_MCP -->|OAuth| GOOGLE_API["Google APIs"]
+    GCAL_MCP -->|OAuth| GOOGLE_API
 ```
 
 ### Agent Runner Query Loop
