@@ -2,6 +2,27 @@
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
+## Repository Workflow
+
+This is a fork of [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw). Always commit to `mtr`, never to `main`.
+
+| Remote | URL | Purpose |
+|--------|-----|---------|
+| `origin` | `git@github.com:mtr/nanoclaw.git` | Our fork (push here) |
+| `upstream` | `https://github.com/qwibitai/nanoclaw.git` | Original repo (pull from here) |
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Clean mirror of upstream — do not commit here |
+| `mtr` | Our customizations — all work happens here |
+
+Syncing upstream changes:
+```bash
+git fetch upstream
+git checkout main && git merge upstream/main
+git checkout mtr && git merge main
+```
+
 ## Quick Context
 
 Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
