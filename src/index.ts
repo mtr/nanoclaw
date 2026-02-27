@@ -503,10 +503,15 @@ async function main(): Promise<void> {
         apiKey,
         cliChannel,
         getGroups: () => registeredGroups,
-        getHistory: (jid, _limit) =>
-          getMessagesSince(jid, new Date(0).toISOString(), ASSISTANT_NAME),
+        getHistory: (jid, limit) => {
+          const messages = getMessagesSince(jid, new Date(0).toISOString(), ASSISTANT_NAME);
+          return limit ? messages.slice(-limit) : messages;
+        },
       });
       pushSseEvent = api.pushSseEvent;
+      api.server.on('error', (err) => {
+        logger.error({ err, port: API_PORT }, 'HTTP API server failed to start');
+      });
       api.server.listen(API_PORT, '127.0.0.1', () => {
         logger.info({ port: API_PORT }, 'HTTP API server listening');
       });
@@ -525,26 +530,30 @@ async function main(): Promise<void> {
     });
 
     // TTS: check modality signal
-    const shouldSpeak = text.includes('<audio>');
-    if (shouldSpeak && isTtsEnabled()) {
-      const budget = checkBudget();
-      if (budget.ttsAllowed) {
-        const cleanText = text.replace(/<audio>|<\/audio>/g, '').trim();
-        const result = await synthesizeSpeech(cleanText);
-        if (result) {
-          const audioId = saveAudioFile(result.audio);
-          recordTtsUsage({
-            characters: result.characterCount,
-            costEstimate: result.characterCount * 0.000015,
-            model: 'gpt-4o-mini-tts',
+    try {
+      const shouldSpeak = text.includes('<audio>');
+      if (shouldSpeak && isTtsEnabled()) {
+        const budget = checkBudget();
+        if (budget.ttsAllowed) {
+          const cleanText = text.replace(/<audio>|<\/audio>/g, '').trim();
+          const result = await synthesizeSpeech(cleanText);
+          if (result) {
+            const audioId = saveAudioFile(result.audio);
+            recordTtsUsage({
+              characters: result.characterCount,
+              costEstimate: result.characterCount * 0.000015,
+              model: 'gpt-4o-mini-tts',
+            });
+            pushSseEvent?.('audio', { jid, audioUrl: `/api/audio/${audioId}` });
+          }
+        } else {
+          pushSseEvent?.('budget_warning', {
+            message: 'TTS budget exceeded, text-only response',
           });
-          pushSseEvent?.('audio', { jid, audioUrl: `/api/audio/${audioId}` });
         }
-      } else {
-        pushSseEvent?.('budget_warning', {
-          message: 'TTS budget exceeded, text-only response',
-        });
       }
+    } catch (err) {
+      logger.error({ err }, 'TTS processing failed in outbound handler');
     }
   });
 
