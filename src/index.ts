@@ -2,13 +2,21 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  API_ENABLED,
+  API_PORT,
   ASSISTANT_NAME,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
+import { CliChannel } from './channels/cli.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
+import { createApiServer, saveAudioFile } from './api-server.js';
+import { synthesizeSpeech, isTtsEnabled } from './tts.js';
+import { recordTtsUsage, checkBudget } from './cost-tracker.js';
+import { readEnvFile } from './env.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -478,6 +486,81 @@ async function main(): Promise<void> {
   whatsapp = new WhatsAppChannel(channelOpts);
   channels.push(whatsapp);
   await whatsapp.connect();
+
+  // CLI channel
+  const cliChannel = new CliChannel(channelOpts);
+  channels.push(cliChannel);
+  await cliChannel.connect();
+
+  // HTTP API server
+  let pushSseEvent: ((event: string, data: Record<string, unknown>) => void) | null = null;
+
+  if (API_ENABLED) {
+    const env = readEnvFile(['NANOCLAW_API_KEY']);
+    const apiKey = env.NANOCLAW_API_KEY;
+    if (apiKey) {
+      const api = createApiServer({
+        apiKey,
+        cliChannel,
+        getGroups: () => registeredGroups,
+        getHistory: (jid, limit) =>
+          getMessagesSince(jid, new Date(0).toISOString(), ASSISTANT_NAME),
+      });
+      pushSseEvent = api.pushSseEvent;
+      api.server.listen(API_PORT, '127.0.0.1', () => {
+        logger.info({ port: API_PORT }, 'HTTP API server listening');
+      });
+    } else {
+      logger.info('NANOCLAW_API_KEY not set — HTTP API disabled');
+    }
+  }
+
+  // Wire CLI outbound handler
+  cliChannel.setOutboundHandler(async (jid, text) => {
+    pushSseEvent?.('message', {
+      jid,
+      content: text,
+      audioUrl: null,
+      timestamp: new Date().toISOString(),
+    });
+
+    // TTS: check modality signal
+    const shouldSpeak = text.includes('<audio>');
+    if (shouldSpeak && isTtsEnabled()) {
+      const budget = checkBudget();
+      if (budget.ttsAllowed) {
+        const cleanText = text.replace(/<audio>|<\/audio>/g, '').trim();
+        const result = await synthesizeSpeech(cleanText);
+        if (result) {
+          const audioId = saveAudioFile(result.audio);
+          recordTtsUsage({
+            characters: result.characterCount,
+            costEstimate: result.characterCount * 0.000015,
+            model: 'gpt-4o-mini-tts',
+          });
+          pushSseEvent?.('audio', { jid, audioUrl: `/api/audio/${audioId}` });
+        }
+      } else {
+        pushSseEvent?.('budget_warning', {
+          message: 'TTS budget exceeded, text-only response',
+        });
+      }
+    }
+  });
+
+  // Pre-register CLI group
+  if (!registeredGroups['cli:main']) {
+    const cliGroup = {
+      name: 'CLI',
+      folder: 'cli',
+      trigger: '',
+      added_at: new Date().toISOString(),
+      requiresTrigger: false,
+    };
+    setRegisteredGroup('cli:main', cliGroup);
+    registeredGroups['cli:main'] = cliGroup;
+    fs.mkdirSync(path.join(GROUPS_DIR, 'cli', 'logs'), { recursive: true });
+  }
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({

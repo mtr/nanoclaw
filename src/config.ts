@@ -58,6 +58,10 @@ export const TRIGGER_PATTERN = new RegExp(
   'i',
 );
 
+// HTTP API
+export const API_PORT = parseInt(process.env.NANOCLAW_API_PORT || '3000', 10);
+export const API_ENABLED = process.env.NANOCLAW_API_ENABLED !== 'false';
+
 // Timezone for scheduled tasks (cron expressions, etc.)
 // Uses system timezone by default
 export const TIMEZONE =
