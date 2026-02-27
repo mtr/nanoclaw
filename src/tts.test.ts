@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { synthesizeSpeech, type TtsConfig } from './tts.js';
+import { synthesizeSpeech, isTtsEnabled, type TtsConfig } from './tts.js';
 
 // Mock the openai module
 vi.mock('openai', () => {
@@ -65,5 +65,29 @@ describe('synthesizeSpeech', () => {
     const result = await synthesizeSpeech(text);
     expect(result).not.toBeNull();
     expect(result!.characterCount).toBe(text.length);
+  });
+});
+
+describe('isTtsEnabled', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns true when OPENAI_TTS_ENABLED is absent', async () => {
+    const { readEnvFile } = await import('./env.js');
+    vi.mocked(readEnvFile).mockReturnValueOnce({});
+    expect(isTtsEnabled()).toBe(true);
+  });
+
+  it('returns false when OPENAI_TTS_ENABLED is "false"', async () => {
+    const { readEnvFile } = await import('./env.js');
+    vi.mocked(readEnvFile).mockReturnValueOnce({ OPENAI_TTS_ENABLED: 'false' });
+    expect(isTtsEnabled()).toBe(false);
+  });
+
+  it('returns true when OPENAI_TTS_ENABLED is "true"', async () => {
+    const { readEnvFile } = await import('./env.js');
+    vi.mocked(readEnvFile).mockReturnValueOnce({ OPENAI_TTS_ENABLED: 'true' });
+    expect(isTtsEnabled()).toBe(true);
   });
 });
