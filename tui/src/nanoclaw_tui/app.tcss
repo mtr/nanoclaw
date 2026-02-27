@@ -1,0 +1,13 @@
+Screen {
+    layout: vertical;
+}
+
+#chat-view {
+    height: 1fr;
+    padding: 1 2;
+}
+
+MessageInput {
+    dock: bottom;
+    margin: 0 1;
+}
