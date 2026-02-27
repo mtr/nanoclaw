@@ -10,6 +10,8 @@ from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Static
 
 from nanoclaw_tui.api_client import NanoClawClient
+from nanoclaw_tui.audio.player import play_audio
+from nanoclaw_tui.audio.recorder import AudioRecorder
 from nanoclaw_tui.config import TuiConfig
 from nanoclaw_tui.widgets.chat_view import AgentMessage, UserMessage
 from nanoclaw_tui.widgets.input_bar import MessageInput
@@ -26,6 +28,7 @@ class NanoClawTui(App[None]):
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+g", "toggle_sidebar", "Groups"),
         Binding("ctrl+r", "search", "Search"),
+        Binding("ctrl+space", "toggle_recording", "Voice", show=True),
     ]
 
     def __init__(self, config: TuiConfig | None = None) -> None:
@@ -36,6 +39,7 @@ class NanoClawTui(App[None]):
             api_key=self.config.api_key,
         )
         self.current_jid = self.config.default_jid
+        self.recorder = AudioRecorder()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -89,6 +93,13 @@ class NanoClawTui(App[None]):
                     AgentMessage(event.data.get("content", ""))
                 )
                 chat_view.scroll_end(animate=False)
+            elif (
+                event.event == "audio"
+                and event.data.get("jid") == self.current_jid
+            ):
+                audio_url = event.data.get("audioUrl", "")
+                if audio_url:
+                    self.run_worker(self._play_audio(audio_url))
 
     async def on_unmount(self) -> None:
         """Clean up client resources."""
@@ -127,6 +138,41 @@ class NanoClawTui(App[None]):
             chat_view.scroll_end(animate=False)
         except Exception:
             await chat_view.mount(Static("Failed to load history."))
+
+    def action_toggle_recording(self) -> None:
+        """Toggle push-to-talk recording on Ctrl+Space."""
+        if self.recorder.is_recording:
+            audio_data = self.recorder.stop()
+            if audio_data:
+                self.run_worker(self._send_voice(audio_data))
+        else:
+            self.recorder.start()
+            self.notify("Recording... Press Ctrl+Space to stop")
+
+    async def _send_voice(self, audio_data: bytes) -> None:
+        """Send recorded audio to NanoClaw."""
+        chat_view = self.query_one("#chat-view")
+        await chat_view.mount(Static("[dim]Sending voice message...[/dim]"))
+        chat_view.scroll_end(animate=False)
+        try:
+            await self.client.send_audio(self.current_jid, audio_data)
+        except Exception as e:
+            await chat_view.mount(
+                Static(f"[red]Failed to send voice: {e}[/red]")
+            )
+
+    async def _play_audio(self, audio_url: str) -> None:
+        """Download and play an audio file from the server."""
+        try:
+            audio_data = await self.client.download_audio(audio_url)
+            player = (
+                None
+                if self.config.audio_player == "auto"
+                else self.config.audio_player
+            )
+            await play_audio(audio_data, player)
+        except Exception:
+            self.notify("Failed to play audio", severity="warning")
 
     def action_search(self) -> None:
         """Open message search (future enhancement)."""
