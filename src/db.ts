@@ -73,6 +73,19 @@ function createSchema(database: Database.Database): void {
       group_folder TEXT PRIMARY KEY,
       session_id TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS tts_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+      characters INTEGER NOT NULL,
+      cost_estimate REAL NOT NULL,
+      model TEXT NOT NULL,
+      message_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS tts_budgets (
+      period TEXT PRIMARY KEY,
+      amount REAL NOT NULL,
+      is_auto_derived INTEGER DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -143,6 +156,11 @@ export function initDatabase(): void {
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
   createSchema(db);
+}
+
+/** Returns the active database instance. */
+export function getDb(): Database.Database {
+  return db;
 }
 
 /**
