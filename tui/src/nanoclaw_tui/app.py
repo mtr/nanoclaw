@@ -14,6 +14,7 @@ from nanoclaw_tui.audio.player import play_audio
 from nanoclaw_tui.audio.recorder import AudioRecorder
 from nanoclaw_tui.config import TuiConfig
 from nanoclaw_tui.widgets.chat_view import AgentMessage, UserMessage
+from nanoclaw_tui.widgets.cost_monitor import CostMonitor
 from nanoclaw_tui.widgets.input_bar import MessageInput
 from nanoclaw_tui.widgets.session_sidebar import GroupSelected, SessionSidebar
 
@@ -43,6 +44,7 @@ class NanoClawTui(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield CostMonitor()
         yield SessionSidebar()
         with VerticalScroll(id="chat-view"):
             yield Static("Connecting to NanoClaw...", id="status")
@@ -50,8 +52,9 @@ class NanoClawTui(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
-        """Start SSE listener and load history."""
+        """Start SSE listener, cost polling, and load history."""
         self.run_worker(self._listen_for_events(), exclusive=True)
+        self.run_worker(self._poll_cost(), exclusive=False)
         try:
             history = await self.client.get_history(self.current_jid)
             chat_view = self.query_one("#chat-view")
@@ -181,6 +184,19 @@ class NanoClawTui(App[None]):
             await play_audio(audio_data, player)
         except Exception:
             self.notify("Failed to play audio", severity="warning")
+
+    async def _poll_cost(self) -> None:
+        """Poll cost summary every 30 seconds."""
+        import asyncio
+
+        while True:
+            try:
+                cost_data = await self.client.get_cost_summary()
+                cost_monitor = self.query_one(CostMonitor)
+                cost_monitor.update_from_api(cost_data)
+            except Exception:
+                pass
+            await asyncio.sleep(30)
 
     def action_search(self) -> None:
         """Open message search (future enhancement)."""
