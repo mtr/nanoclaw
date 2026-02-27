@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import threading
 
 import numpy as np
 
@@ -17,6 +18,7 @@ class AudioRecorder:
         self.channels = channels
         self._recording = False
         self._frames: list[np.ndarray] = []
+        self._lock = threading.Lock()
         self._stream: object | None = None
 
     def start(self) -> None:
@@ -43,10 +45,14 @@ class AudioRecorder:
             self._stream.close()  # type: ignore[union-attr]
             self._stream = None
 
-        if not self._frames:
+        with self._lock:
+            frames = list(self._frames)
+            self._frames = []
+
+        if not frames:
             return b""
 
-        audio_data = np.concatenate(self._frames)
+        audio_data = np.concatenate(frames)
         buffer = io.BytesIO()
         sf.write(
             buffer,
@@ -69,4 +75,5 @@ class AudioRecorder:
         _status: object,
     ) -> None:
         if self._recording:
-            self._frames.append(indata.copy())
+            with self._lock:
+                self._frames.append(indata.copy())

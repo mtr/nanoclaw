@@ -142,11 +142,19 @@ class NanoClawTui(App[None]):
     def action_toggle_recording(self) -> None:
         """Toggle push-to-talk recording on Ctrl+Space."""
         if self.recorder.is_recording:
-            audio_data = self.recorder.stop()
+            try:
+                audio_data = self.recorder.stop()
+            except Exception as e:
+                self.notify(f"Recording failed: {e}", severity="error")
+                return
             if audio_data:
                 self.run_worker(self._send_voice(audio_data))
         else:
-            self.recorder.start()
+            try:
+                self.recorder.start()
+            except Exception as e:
+                self.notify(f"Microphone error: {e}", severity="error")
+                return
             self.notify("Recording... Press Ctrl+Space to stop")
 
     async def _send_voice(self, audio_data: bytes) -> None:
