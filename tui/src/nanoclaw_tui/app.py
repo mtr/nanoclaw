@@ -83,7 +83,7 @@ class NanoClawTui(App[None]):
     async def _listen_for_events(self) -> None:
         """Listen for SSE events from NanoClaw."""
         async for event in self.client.stream_events():
-            if event.event == "message":
+            if event.event == "message" and event.data.get("jid") == self.current_jid:
                 chat_view = self.query_one("#chat-view")
                 await chat_view.mount(
                     AgentMessage(event.data.get("content", ""))
@@ -109,7 +109,7 @@ class NanoClawTui(App[None]):
             sidebar = self.query_one(SessionSidebar)
             sidebar.update_groups(groups, self.current_jid)
         except Exception:
-            pass
+            self.notify("Failed to load groups", severity="error")
 
     async def on_group_selected(self, event: GroupSelected) -> None:
         """Switch to the selected group conversation."""
