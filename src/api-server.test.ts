@@ -44,15 +44,14 @@ describe('API Server', () => {
   let server: http.Server;
 
   beforeAll(async () => {
-    server = createApiServer({
-      port: 13579,
+    ({ server } = createApiServer({
       apiKey: 'test-key',
       cliChannel: {
         injectMessage: vi.fn(),
       } as any,
       getGroups: vi.fn(() => ({})),
       getHistory: vi.fn(() => []),
-    });
+    }));
     await new Promise<void>((r) => server.listen(13579, '127.0.0.1', r));
   });
 

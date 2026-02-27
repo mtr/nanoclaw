@@ -1,18 +1,22 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { logger } from './logger.js';
 import { DATA_DIR } from './config.js';
 import type { CliChannel } from './channels/cli.js';
 import type { RegisteredGroup, NewMessage } from './types.js';
 
 export interface ApiServerOpts {
-  port: number;
   apiKey: string;
   cliChannel: CliChannel;
   getGroups: () => Record<string, RegisteredGroup>;
   getHistory: (jid: string, limit?: number) => NewMessage[];
+}
+
+export interface ApiServer {
+  server: http.Server;
+  pushSseEvent: (event: string, data: Record<string, unknown>) => void;
 }
 
 interface SseClient {
@@ -20,22 +24,28 @@ interface SseClient {
   res: http.ServerResponse;
 }
 
-const sseClients: SseClient[] = [];
-
-export function pushSseEvent(
-  event: string,
-  data: Record<string, unknown>,
-): void {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of sseClients) {
-    client.res.write(payload);
-  }
+function safeTokenEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-function parseBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
+function parseBody(
+  req: http.IncomingMessage,
+  maxBytes = 1_048_576,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', (chunk: string) => (body += chunk));
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        req.destroy();
+        reject(new Error('Body too large'));
+        return;
+      }
+      body += chunk;
+    });
+    req.on('error', reject);
     req.on('end', () => resolve(body));
   });
 }
@@ -49,9 +59,21 @@ function jsonResponse(
   res.end(JSON.stringify(data));
 }
 
-export function createApiServer(opts: ApiServerOpts): http.Server {
+export function createApiServer(opts: ApiServerOpts): ApiServer {
   const audioDir = path.join(DATA_DIR, 'audio');
   fs.mkdirSync(audioDir, { recursive: true });
+
+  const sseClients: SseClient[] = [];
+
+  function pushSseEvent(
+    event: string,
+    data: Record<string, unknown>,
+  ): void {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const client of sseClients) {
+      client.res.write(payload);
+    }
+  }
 
   const server = http.createServer(async (req, res) => {
     // CORS for local clients
@@ -60,6 +82,7 @@ export function createApiServer(opts: ApiServerOpts): http.Server {
       'Access-Control-Allow-Headers',
       'Authorization, Content-Type',
     );
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
@@ -69,7 +92,7 @@ export function createApiServer(opts: ApiServerOpts): http.Server {
     // Auth check
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace(/^Bearer\s+/i, '');
-    if (token !== opts.apiKey) {
+    if (!safeTokenEqual(token, opts.apiKey)) {
       jsonResponse(res, 401, { error: 'Unauthorized' });
       return;
     }
@@ -91,7 +114,13 @@ export function createApiServer(opts: ApiServerOpts): http.Server {
       // POST /api/messages
       if (req.method === 'POST' && pathname === '/api/messages') {
         const raw = await parseBody(req);
-        const msg = JSON.parse(raw);
+        let msg;
+        try {
+          msg = JSON.parse(raw);
+        } catch {
+          jsonResponse(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
         const { jid, content, type, sender, senderName } = msg;
         if (!jid || !content) {
           jsonResponse(res, 400, { error: 'jid and content are required' });
@@ -145,7 +174,11 @@ export function createApiServer(opts: ApiServerOpts): http.Server {
       if (req.method === 'GET' && audioMatch) {
         const filename = audioMatch[1];
         // Prevent directory traversal
-        if (filename.includes('..') || filename.includes('/')) {
+        const resolved = path.resolve(audioDir, filename);
+        if (
+          !resolved.startsWith(audioDir + path.sep) &&
+          resolved !== audioDir
+        ) {
           jsonResponse(res, 400, { error: 'Invalid audio ID' });
           return;
         }
@@ -182,7 +215,14 @@ export function createApiServer(opts: ApiServerOpts): http.Server {
       // POST /api/cost/budget
       if (req.method === 'POST' && pathname === '/api/cost/budget') {
         const raw = await parseBody(req);
-        const { period, amount } = JSON.parse(raw);
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          jsonResponse(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+        const { period, amount } = parsed;
         if (
           !['daily', 'weekly', 'monthly'].includes(period) ||
           typeof amount !== 'number'
@@ -204,7 +244,7 @@ export function createApiServer(opts: ApiServerOpts): http.Server {
     }
   });
 
-  return server;
+  return { server, pushSseEvent };
 }
 
 /** Save a TTS audio buffer and return its ID for serving via /api/audio/:id */
