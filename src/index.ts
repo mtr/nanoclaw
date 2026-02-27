@@ -45,7 +45,14 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  extractSpokenText,
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  stripAudioTags,
+  stripInternalTags,
+} from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -62,6 +69,7 @@ let messageLoopRunning = false;
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+let pushSseEvent: ((event: string, data: Record<string, unknown>) => void) | null = null;
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -206,12 +214,44 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         typeof result.result === 'string'
           ? result.result
           : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      // Strip internal reasoning, then extract TTS text and clean display text
+      const stripped = stripInternalTags(raw);
+      const spokenText = extractSpokenText(stripped);
+      const text = stripAudioTags(stripped).trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
+      }
+      // TTS: synthesize and send audio if <audio> tags were present
+      if (spokenText) {
+        try {
+          if (isTtsEnabled()) {
+            const budget = checkBudget();
+            if (budget.ttsAllowed) {
+              const result = await synthesizeSpeech(spokenText);
+              if (result) {
+                await channel.sendAudio?.(
+                  chatJid,
+                  result.audio,
+                  'audio/ogg; codecs=opus',
+                );
+                const audioId = saveAudioFile(result.audio);
+                recordTtsUsage({
+                  characters: result.characterCount,
+                  costEstimate: result.characterCount * 0.000015,
+                  model: 'gpt-4o-mini-tts',
+                });
+                pushSseEvent?.('audio', {
+                  jid: chatJid,
+                  audioUrl: `/api/audio/${audioId}`,
+                });
+              }
+            }
+          }
+        } catch (err) {
+          logger.error({ err }, 'TTS processing failed');
+        }
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -493,8 +533,6 @@ async function main(): Promise<void> {
   await cliChannel.connect();
 
   // HTTP API server
-  let pushSseEvent: ((event: string, data: Record<string, unknown>) => void) | null = null;
-
   if (API_ENABLED) {
     const env = readEnvFile(['NANOCLAW_API_KEY']);
     const apiKey = env.NANOCLAW_API_KEY;
@@ -520,41 +558,15 @@ async function main(): Promise<void> {
     }
   }
 
-  // Wire CLI outbound handler
-  cliChannel.setOutboundHandler(async (jid, text) => {
+  // Wire CLI outbound handler — just push SSE text events.
+  // TTS synthesis is handled centrally in the streaming callback.
+  cliChannel.setOutboundHandler((jid, text) => {
     pushSseEvent?.('message', {
       jid,
       content: text,
       audioUrl: null,
       timestamp: new Date().toISOString(),
     });
-
-    // TTS: check modality signal
-    try {
-      const shouldSpeak = text.includes('<audio>');
-      if (shouldSpeak && isTtsEnabled()) {
-        const budget = checkBudget();
-        if (budget.ttsAllowed) {
-          const cleanText = text.replace(/<audio>|<\/audio>/g, '').trim();
-          const result = await synthesizeSpeech(cleanText);
-          if (result) {
-            const audioId = saveAudioFile(result.audio);
-            recordTtsUsage({
-              characters: result.characterCount,
-              costEstimate: result.characterCount * 0.000015,
-              model: 'gpt-4o-mini-tts',
-            });
-            pushSseEvent?.('audio', { jid, audioUrl: `/api/audio/${audioId}` });
-          }
-        } else {
-          pushSseEvent?.('budget_warning', {
-            message: 'TTS budget exceeded, text-only response',
-          });
-        }
-      }
-    } catch (err) {
-      logger.error({ err }, 'TTS processing failed in outbound handler');
-    }
   });
 
   // Pre-register CLI group

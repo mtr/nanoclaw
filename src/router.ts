@@ -21,8 +21,22 @@ export function stripInternalTags(text: string): string {
   return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
 }
 
+export function stripAudioTags(text: string): string {
+  return text.replace(/<audio>|<\/audio>/g, '');
+}
+
+export function extractSpokenText(text: string): string | null {
+  const matches = text.match(/<audio>([\s\S]*?)<\/audio>/g);
+  if (!matches) return null;
+  const spoken = matches
+    .map((m) => m.replace(/<audio>|<\/audio>/g, ''))
+    .join(' ')
+    .trim();
+  return spoken || null;
+}
+
 export function formatOutbound(rawText: string): string {
-  const text = stripInternalTags(rawText);
+  const text = stripAudioTags(stripInternalTags(rawText)).trim();
   if (!text) return '';
   return text;
 }

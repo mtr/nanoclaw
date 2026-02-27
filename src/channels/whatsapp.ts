@@ -248,6 +248,19 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
+  async sendAudio(jid: string, audio: Buffer, mimetype: string): Promise<void> {
+    if (!this.connected || !this.sock) {
+      logger.warn({ jid }, 'WA disconnected, cannot send audio');
+      return;
+    }
+    try {
+      await this.sock.sendMessage(jid, { audio, mimetype, ptt: true });
+      logger.info({ jid, bytes: audio.length }, 'Audio message sent');
+    } catch (err) {
+      logger.warn({ jid, err }, 'Failed to send audio message');
+    }
+  }
+
   isConnected(): boolean {
     return this.connected;
   }

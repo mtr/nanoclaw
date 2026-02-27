@@ -87,6 +87,8 @@ export interface Channel {
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  // Optional: send audio as a voice note (e.g. WhatsApp PTT message).
+  sendAudio?(jid: string, audio: Buffer, mimetype: string): Promise<void>;
 }
 
 /** Base options shared by all channel implementations. */
