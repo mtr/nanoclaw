@@ -53,9 +53,9 @@ class NanoClawTui(App[None]):
             status.remove()
             for msg in history:
                 if msg.get("is_from_me") or msg.get("is_bot_message"):
-                    await chat_view.mount(AgentMessage(msg["content"]))
+                    await chat_view.mount(AgentMessage(msg.get("content", "")))
                 else:
-                    await chat_view.mount(UserMessage(msg["content"]))
+                    await chat_view.mount(UserMessage(msg.get("content", "")))
             chat_view.scroll_end(animate=False)
         except Exception:
             self.query_one("#status", Static).update(
@@ -87,6 +87,11 @@ class NanoClawTui(App[None]):
                     AgentMessage(event.data.get("content", ""))
                 )
                 chat_view.scroll_end(animate=False)
+
+    async def on_unmount(self) -> None:
+        """Clean up client resources."""
+        self.client.stop_streaming()
+        await self.client.close()
 
     def action_toggle_sidebar(self) -> None:
         """Toggle the group sidebar (implemented in Task 9)."""
