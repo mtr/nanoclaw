@@ -78,17 +78,16 @@ export function setBudget(
     `INSERT OR REPLACE INTO tts_budgets (period, amount, is_auto_derived) VALUES (?, ?, ?)`,
   );
 
-  // Set the explicit budget
-  upsert.run(period, amount, 0);
-
-  // Auto-derive other periods
-  if (period === 'monthly') {
-    upsert.run('weekly', amount / 4.35, 1);
-    upsert.run('daily', amount / 30.44, 1);
-  } else if (period === 'weekly') {
-    upsert.run('daily', amount / 7, 1);
-  }
-  // Don't auto-derive upward (daily doesn't imply weekly/monthly)
+  const run = db.transaction(() => {
+    upsert.run(period, amount, 0);
+    if (period === 'monthly') {
+      upsert.run('weekly', amount / 4.35, 1);
+      upsert.run('daily', amount / 30.44, 1);
+    } else if (period === 'weekly') {
+      upsert.run('daily', amount / 7, 1);
+    }
+  });
+  run();
 }
 
 export function getBudgets(): Record<string, number> {

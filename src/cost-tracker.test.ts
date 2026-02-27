@@ -60,4 +60,43 @@ describe('CostTracker', () => {
     expect(status.daily!.alertTier).toBe('exceeded');
     expect(status.ttsAllowed).toBe(false);
   });
+
+  it('returns all-null periods and ttsAllowed when no budget set', () => {
+    const status = checkBudget();
+    expect(status.daily).toBeNull();
+    expect(status.weekly).toBeNull();
+    expect(status.monthly).toBeNull();
+    expect(status.ttsAllowed).toBe(true);
+  });
+
+  it('accumulates multiple usage records in summary', () => {
+    recordTtsUsage({
+      characters: 200,
+      costEstimate: 0.01,
+      model: 'gpt-4o-mini-tts',
+      messageId: 'msg-a',
+    });
+    recordTtsUsage({
+      characters: 300,
+      costEstimate: 0.02,
+      model: 'gpt-4o-mini-tts',
+      messageId: 'msg-b',
+    });
+    const summary = getTtsUsageSummary();
+    expect(summary.today.characters).toBe(500);
+    expect(summary.today.cost).toBeCloseTo(0.03);
+    expect(summary.today.count).toBe(2);
+  });
+
+  it('records TTS usage without messageId', () => {
+    recordTtsUsage({
+      characters: 100,
+      costEstimate: 0.005,
+      model: 'gpt-4o-mini-tts',
+    });
+    const summary = getTtsUsageSummary();
+    expect(summary.today.characters).toBe(100);
+    expect(summary.today.cost).toBeCloseTo(0.005);
+    expect(summary.today.count).toBe(1);
+  });
 });
