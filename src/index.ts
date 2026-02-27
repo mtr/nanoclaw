@@ -503,7 +503,7 @@ async function main(): Promise<void> {
         apiKey,
         cliChannel,
         getGroups: () => registeredGroups,
-        getHistory: (jid, limit) =>
+        getHistory: (jid, _limit) =>
           getMessagesSince(jid, new Date(0).toISOString(), ASSISTANT_NAME),
       });
       pushSseEvent = api.pushSseEvent;
