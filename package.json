@@ -16,7 +16,8 @@
     "prepare": "husky",
     "setup": "tsx setup/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tui": "bash scripts/start-tui.sh"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
