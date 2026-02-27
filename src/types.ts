@@ -89,6 +89,13 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
 }
 
+/** Base options shared by all channel implementations. */
+export interface ChannelOpts {
+  onMessage: OnInboundMessage;
+  onChatMetadata: OnChatMetadata;
+  registeredGroups: () => Record<string, RegisteredGroup>;
+}
+
 // Callback type that channels use to deliver inbound messages
 export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
 
