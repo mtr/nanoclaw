@@ -13,6 +13,7 @@ from nanoclaw_tui.api_client import NanoClawClient
 from nanoclaw_tui.config import TuiConfig
 from nanoclaw_tui.widgets.chat_view import AgentMessage, UserMessage
 from nanoclaw_tui.widgets.input_bar import MessageInput
+from nanoclaw_tui.widgets.session_sidebar import GroupSelected, SessionSidebar
 
 
 class NanoClawTui(App[None]):
@@ -38,6 +39,7 @@ class NanoClawTui(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield SessionSidebar()
         with VerticalScroll(id="chat-view"):
             yield Static("Connecting to NanoClaw...", id="status")
         yield MessageInput(id="message-input")
@@ -94,7 +96,37 @@ class NanoClawTui(App[None]):
         await self.client.close()
 
     def action_toggle_sidebar(self) -> None:
-        """Toggle the group sidebar (implemented in Task 9)."""
+        """Toggle the group sidebar visibility and refresh group list."""
+        sidebar = self.query_one(SessionSidebar)
+        sidebar.toggle_class("visible")
+        if sidebar.has_class("visible"):
+            self.run_worker(self._refresh_groups())
+
+    async def _refresh_groups(self) -> None:
+        """Fetch groups from the API and update the sidebar."""
+        try:
+            groups = await self.client.get_groups()
+            sidebar = self.query_one(SessionSidebar)
+            sidebar.update_groups(groups, self.current_jid)
+        except Exception:
+            pass
+
+    async def on_group_selected(self, event: GroupSelected) -> None:
+        """Switch to the selected group conversation."""
+        self.current_jid = event.jid
+        chat_view = self.query_one("#chat-view")
+        await chat_view.remove_children()
+        try:
+            history = await self.client.get_history(self.current_jid)
+            for msg in history:
+                content = msg.get("content", "")
+                if msg.get("is_from_me") or msg.get("is_bot_message"):
+                    await chat_view.mount(AgentMessage(content))
+                else:
+                    await chat_view.mount(UserMessage(content))
+            chat_view.scroll_end(animate=False)
+        except Exception:
+            await chat_view.mount(Static("Failed to load history."))
 
     def action_search(self) -> None:
         """Open message search (future enhancement)."""
