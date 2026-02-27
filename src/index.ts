@@ -570,6 +570,8 @@ async function main(): Promise<void> {
     registeredGroups['cli:main'] = cliGroup;
     fs.mkdirSync(path.join(GROUPS_DIR, 'cli', 'logs'), { recursive: true });
   }
+  // Ensure CLI chat exists in the chats table (idempotent upsert)
+  storeChatMetadata('cli:main', new Date().toISOString(), 'CLI', 'cli', false);
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
