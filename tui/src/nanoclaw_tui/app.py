@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 from textual.app import App, ComposeResult
@@ -187,15 +188,14 @@ class NanoClawTui(App[None]):
 
     async def _poll_cost(self) -> None:
         """Poll cost summary every 30 seconds."""
-        import asyncio
-
         while True:
             try:
                 cost_data = await self.client.get_cost_summary()
-                cost_monitor = self.query_one(CostMonitor)
-                cost_monitor.update_from_api(cost_data)
             except Exception:
-                pass
+                await asyncio.sleep(30)
+                continue
+            cost_monitor = self.query_one(CostMonitor)
+            cost_monitor.update_from_api(cost_data)
             await asyncio.sleep(30)
 
     def action_search(self) -> None:

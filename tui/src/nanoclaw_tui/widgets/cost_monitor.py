@@ -47,6 +47,5 @@ class CostMonitor(Static):
         self.spent = today.get("cost", 0.0)
 
         daily = budget_status.get("daily")
-        if daily:
-            self.budget = daily.get("budget", 0.0)
-            self.alert_tier = daily.get("alertTier", "ok")
+        self.budget = daily.get("budget", 0.0) if daily else 0.0
+        self.alert_tier = daily.get("alertTier", "ok") if daily else "ok"
