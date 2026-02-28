@@ -588,6 +588,25 @@ async function startMessageLoop(): Promise<void> {
             continue;
           }
 
+          // Intercept thread commands before piping to container
+          let hadThreadCommand = false;
+          for (const msg of groupMessages) {
+            if (THREAD_COMMANDS.test(msg.content.trim())) {
+              const handled = await handleThreadCommand(chatJid, msg.content, channel);
+              if (handled) {
+                lastAgentTimestamp[chatJid] = msg.timestamp;
+                saveState();
+                hadThreadCommand = true;
+              }
+            }
+          }
+
+          // Filter out thread commands from messages to pipe
+          const nonCommandMessages = groupMessages.filter(
+            m => !THREAD_COMMANDS.test(m.content.trim()),
+          );
+          if (nonCommandMessages.length === 0) continue;
+
           const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
@@ -595,7 +614,7 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            const hasTrigger = groupMessages.some((m) =>
+            const hasTrigger = nonCommandMessages.some((m) =>
               TRIGGER_PATTERN.test(m.content.trim()),
             );
             if (!hasTrigger) continue;
@@ -603,13 +622,21 @@ async function startMessageLoop(): Promise<void> {
 
           // Pull all messages since lastAgentTimestamp so non-trigger
           // context that accumulated between triggers is included.
-          const allPending = getMessagesSince(
-            chatJid,
-            lastAgentTimestamp[chatJid] || '',
-            ASSISTANT_NAME,
-          );
+          const activeThread = hadThreadCommand ? getActiveThread(chatJid) : undefined;
+          const allPending = activeThread
+            ? getMessagesSinceInThread(
+                chatJid, lastAgentTimestamp[chatJid] || '', ASSISTANT_NAME, activeThread.id,
+              )
+            : getMessagesSince(
+                chatJid,
+                lastAgentTimestamp[chatJid] || '',
+                ASSISTANT_NAME,
+              );
           const messagesToSend =
-            allPending.length > 0 ? allPending : groupMessages;
+            allPending.length > 0
+              ? allPending.filter(m => !THREAD_COMMANDS.test(m.content.trim()))
+              : nonCommandMessages;
+          if (messagesToSend.length === 0) continue;
           const formatted = formatMessages(messagesToSend);
 
           if (queue.sendMessage(chatJid, formatted)) {
