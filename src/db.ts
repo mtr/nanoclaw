@@ -71,7 +71,7 @@ function createSchema(database: Database.Database): void {
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sessions (
-      group_folder TEXT PRIMARY KEY,
+      thread_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS tts_usage (
@@ -151,6 +151,30 @@ function createSchema(database: Database.Database): void {
     );
   } catch {
     /* columns already exist */
+  }
+
+  // Migrate sessions table from group_folder-keyed to thread_id-keyed.
+  // The old schema stored one session per group, which caused stale context
+  // (including voice blobs) to persist across thread resets. The new schema
+  // ties sessions to threads so /new starts fresh and /resume restores context.
+  try {
+    // Check if the old schema exists by looking for the group_folder column
+    const hasOldSchema = database
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM pragma_table_info('sessions') WHERE name = 'group_folder'`,
+      )
+      .get() as { cnt: number };
+    if (hasOldSchema.cnt > 0) {
+      database.exec(`DROP TABLE sessions`);
+      database.exec(`
+        CREATE TABLE sessions (
+          thread_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL
+        )
+      `);
+    }
+  } catch {
+    /* migration already applied or table doesn't exist yet */
   }
 }
 
@@ -519,28 +543,32 @@ export function setRouterState(key: string, value: string): void {
   ).run(key, value);
 }
 
-// --- Session accessors ---
+// --- Session accessors (keyed by thread ID) ---
 
-export function getSession(groupFolder: string): string | undefined {
+export function getSession(threadId: string): string | undefined {
   const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { session_id: string } | undefined;
+    .prepare('SELECT session_id FROM sessions WHERE thread_id = ?')
+    .get(threadId) as { session_id: string } | undefined;
   return row?.session_id;
 }
 
-export function setSession(groupFolder: string, sessionId: string): void {
+export function setSession(threadId: string, sessionId: string): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (thread_id, session_id) VALUES (?, ?)',
+  ).run(threadId, sessionId);
+}
+
+export function deleteSession(threadId: string): void {
+  db.prepare('DELETE FROM sessions WHERE thread_id = ?').run(threadId);
 }
 
 export function getAllSessions(): Record<string, string> {
   const rows = db
-    .prepare('SELECT group_folder, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; session_id: string }>;
+    .prepare('SELECT thread_id, session_id FROM sessions')
+    .all() as Array<{ thread_id: string; session_id: string }>;
   const result: Record<string, string> = {};
   for (const row of rows) {
-    result[row.group_folder] = row.session_id;
+    result[row.thread_id] = row.session_id;
   }
   return result;
 }
@@ -825,15 +853,15 @@ function migrateJsonState(): void {
     }
   }
 
-  // Migrate sessions.json
+  // Migrate sessions.json (legacy: group_folder-keyed, no longer used)
+  // These entries are harmless — they won't match any thread_id and will be
+  // naturally superseded as new thread-scoped sessions are created.
   const sessions = migrateFile('sessions.json') as Record<
     string,
     string
   > | null;
   if (sessions) {
-    for (const [folder, sessionId] of Object.entries(sessions)) {
-      setSession(folder, sessionId);
-    }
+    // Skip — old format used group_folder keys, not thread IDs
   }
 
   // Migrate registered_groups.json
