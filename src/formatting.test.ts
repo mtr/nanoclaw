@@ -5,6 +5,7 @@ import {
   escapeXml,
   formatMessages,
   formatOutbound,
+  slugify,
   stripInternalTags,
 } from './router.js';
 import { NewMessage } from './types.js';
@@ -181,6 +182,28 @@ describe('formatOutbound', () => {
     expect(
       formatOutbound('<internal>thinking</internal>The answer is 42'),
     ).toBe('The answer is 42');
+  });
+});
+
+// --- slugify ---
+
+describe('slugify', () => {
+  it('converts text to lowercase slug', () => {
+    expect(slugify('Hello World')).toBe('hello-world');
+  });
+
+  it('strips special characters', () => {
+    expect(slugify('Hello! @World #123')).toBe('hello-world-123');
+  });
+
+  it('truncates to 40 chars', () => {
+    const long = 'a'.repeat(60);
+    expect(slugify(long).length).toBeLessThanOrEqual(40);
+  });
+
+  it('returns untitled for empty input', () => {
+    expect(slugify('')).toBe('untitled');
+    expect(slugify('!!!')).toBe('untitled');
   });
 });
 

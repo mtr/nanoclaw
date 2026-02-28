@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -28,19 +29,28 @@ import {
   ensureContainerRuntimeRunning,
 } from './container-runtime.js';
 import {
+  archiveThread,
+  createThread,
+  getActiveThread,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
   getMessagesSince,
+  getMessagesSinceInThread,
   getNewMessages,
   getRouterState,
+  getThreadBySlug,
+  getThreadMessageCount,
+  getThreads,
   initDatabase,
+  resumeThread,
   setRegisteredGroup,
   setRouterState,
   setSession,
   storeChatMetadata,
   storeMessage,
+  updateThreadName,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
@@ -50,6 +60,7 @@ import {
   findChannel,
   formatMessages,
   formatOutbound,
+  slugify,
   stripAudioTags,
   stripInternalTags,
 } from './router.js';
@@ -142,6 +153,127 @@ export function _setRegisteredGroups(
   registeredGroups = groups;
 }
 
+const THREAD_COMMANDS = /^\/(new|reset|threads|resume)\b/;
+
+async function handleThreadCommand(
+  chatJid: string,
+  content: string,
+  channel: Channel,
+): Promise<boolean> {
+  const match = content.trim().match(THREAD_COMMANDS);
+  if (!match) return false;
+
+  const command = match[1];
+
+  if (command === 'new' || command === 'reset') {
+    const now = new Date().toISOString();
+    const active = getActiveThread(chatJid);
+
+    if (active) {
+      archiveThread(active.id, now);
+      logger.info(
+        { chatJid, threadId: active.id, threadName: active.name },
+        'Thread archived',
+      );
+    }
+
+    const newId = randomUUID();
+    const newSlug = `thread-${Date.now()}`;
+    createThread({
+      id: newId,
+      chat_jid: chatJid,
+      name: 'New conversation',
+      slug: newSlug,
+      created_at: now,
+      start_timestamp: now,
+    });
+
+    await channel.clearChat?.(chatJid);
+
+    const archivedInfo = active
+      ? ` Previous thread "${active.name}" archived.`
+      : '';
+    await channel.sendMessage(
+      chatJid,
+      `Fresh conversation started.${archivedInfo}`,
+    );
+
+    lastAgentTimestamp[chatJid] = now;
+    saveState();
+
+    return true;
+  }
+
+  if (command === 'threads') {
+    const threads = getThreads(chatJid);
+    if (threads.length === 0) {
+      await channel.sendMessage(
+        chatJid,
+        'No threads yet. Send /new to start one.',
+      );
+      return true;
+    }
+
+    const lines = threads.map((t, i) => {
+      const status = t.archived_at ? '' : ' (active)';
+      const count = getThreadMessageCount(t.id);
+      const date = t.created_at.split('T')[0];
+      return `${i + 1}. ${t.slug}${status} — "${t.name}" (${date}, ${count} msgs)`;
+    });
+
+    await channel.sendMessage(
+      chatJid,
+      `Threads:\n${lines.join('\n')}`,
+    );
+    return true;
+  }
+
+  if (command === 'resume') {
+    const slug = content.trim().split(/\s+/)[1];
+    if (!slug) {
+      await channel.sendMessage(chatJid, 'Usage: /resume <slug>');
+      return true;
+    }
+
+    const target = getThreadBySlug(chatJid, slug);
+    if (!target) {
+      await channel.sendMessage(
+        chatJid,
+        `Thread "${slug}" not found. Use /threads to list.`,
+      );
+      return true;
+    }
+
+    if (!target.archived_at) {
+      await channel.sendMessage(
+        chatJid,
+        `Thread "${slug}" is already active.`,
+      );
+      return true;
+    }
+
+    const now = new Date().toISOString();
+    const active = getActiveThread(chatJid);
+    if (active) {
+      archiveThread(active.id, now);
+    }
+
+    resumeThread(target.id);
+    await channel.clearChat?.(chatJid);
+    await channel.sendMessage(
+      chatJid,
+      `Resumed thread "${target.name}".`,
+    );
+
+    lastAgentTimestamp[chatJid] = target.start_timestamp;
+    saveState();
+
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
@@ -167,25 +299,62 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // Handle thread commands before agent processing
+  for (const msg of missedMessages) {
+    if (THREAD_COMMANDS.test(msg.content.trim())) {
+      const handled = await handleThreadCommand(chatJid, msg.content, channel);
+      if (handled) {
+        lastAgentTimestamp[chatJid] = msg.timestamp;
+        saveState();
+      }
+    }
+  }
+
+  // Re-fetch messages using thread scope (commands may have changed the active thread)
+  const activeThread = getActiveThread(chatJid);
+  const threadMessages = activeThread
+    ? getMessagesSinceInThread(
+        chatJid, lastAgentTimestamp[chatJid] || '', ASSISTANT_NAME, activeThread.id,
+      )
+    : missedMessages;
+
+  // Filter out thread commands from agent input
+  const agentMessages = threadMessages.filter(
+    m => !THREAD_COMMANDS.test(m.content.trim()),
+  );
+
+  if (agentMessages.length === 0) return true;
+
+  // Auto-name thread from first user message
+  if (
+    activeThread &&
+    activeThread.name === 'New conversation' &&
+    agentMessages.length > 0
+  ) {
+    const firstContent = agentMessages[0].content;
+    const autoName = firstContent.slice(0, 60).replace(/\n/g, ' ');
+    updateThreadName(activeThread.id, autoName, slugify(autoName));
+  }
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
-    const hasTrigger = missedMessages.some((m) =>
+    const hasTrigger = agentMessages.some((m) =>
       TRIGGER_PATTERN.test(m.content.trim()),
     );
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages);
+  const prompt = formatMessages(agentMessages);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
+    agentMessages[agentMessages.length - 1].timestamp;
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: group.name, messageCount: agentMessages.length },
     'Processing messages',
   );
 
