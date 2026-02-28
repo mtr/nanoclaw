@@ -657,6 +657,25 @@ function recoverPendingMessages(): void {
   }
 }
 
+function ensureDefaultThreads(): void {
+  for (const chatJid of Object.keys(registeredGroups)) {
+    const active = getActiveThread(chatJid);
+    if (!active) {
+      const id = randomUUID();
+      const now = new Date().toISOString();
+      createThread({
+        id,
+        chat_jid: chatJid,
+        name: 'Default',
+        slug: 'default',
+        created_at: now,
+        start_timestamp: '',
+      });
+      logger.info({ chatJid }, 'Created default thread for group');
+    }
+  }
+}
+
 function ensureContainerSystemRunning(): void {
   ensureContainerRuntimeRunning();
   cleanupOrphans();
@@ -667,6 +686,7 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+  ensureDefaultThreads();
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
