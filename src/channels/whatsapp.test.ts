@@ -625,7 +625,8 @@ describe('WhatsAppChannel', () => {
 
       // Should NOT transcribe
       expect(transcribeAudioMessage).not.toHaveBeenCalled();
-      // Should store as bot message
+      // Should store as bot message exactly once (continue skips duplicate call)
+      expect(opts.onMessage).toHaveBeenCalledTimes(1);
       expect(opts.onMessage).toHaveBeenCalledWith(
         'registered@g.us',
         expect.objectContaining({
@@ -693,6 +694,7 @@ describe('WhatsAppChannel', () => {
 
       // Should skip transcription (fromMe fallback) and mark as bot
       expect(transcribeAudioMessage).not.toHaveBeenCalled();
+      expect(opts.onMessage).toHaveBeenCalledTimes(1);
       expect(opts.onMessage).toHaveBeenCalledWith(
         'registered@g.us',
         expect.objectContaining({

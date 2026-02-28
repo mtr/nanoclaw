@@ -198,7 +198,10 @@ export class WhatsAppChannel implements Channel {
           let finalContent = content;
           if (isVoiceMessage(msg)) {
             const msgId = msg.key.id || '';
-            // Skip transcription for bot-sent audio (ID tracking + fromMe fallback)
+            // Skip transcription for bot-sent audio (ID tracking + fromMe fallback).
+            // On shared numbers, fromMe=true for any sender on that number, so the
+            // fallback may misclassify human audio sent right after a restart. The
+            // ID set handles the common case; fromMe covers only the restart gap.
             if (this.sentAudioIds.has(msgId) || fromMe) {
               this.sentAudioIds.delete(msgId);
               finalContent = '[Bot Audio]';
