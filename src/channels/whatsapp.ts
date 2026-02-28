@@ -34,6 +34,8 @@ export class WhatsAppChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private groupSyncTimerStarted = false;
+  private sentAudioIds = new Set<string>();
+  private static readonly MAX_SENT_AUDIO_IDS = 100;
 
   private opts: WhatsAppChannelOpts;
 
@@ -195,6 +197,24 @@ export class WhatsAppChannel implements Channel {
           // Transcribe voice messages before storing
           let finalContent = content;
           if (isVoiceMessage(msg)) {
+            const msgId = msg.key.id || '';
+            // Skip transcription for bot-sent audio (ID tracking + fromMe fallback)
+            if (this.sentAudioIds.has(msgId) || fromMe) {
+              this.sentAudioIds.delete(msgId);
+              finalContent = '[Bot Audio]';
+              // Override: this IS a bot message regardless of content prefix check
+              this.opts.onMessage(chatJid, {
+                id: msgId,
+                chat_jid: chatJid,
+                sender,
+                sender_name: senderName,
+                content: finalContent,
+                timestamp,
+                is_from_me: fromMe,
+                is_bot_message: true,
+              });
+              continue;
+            }
             try {
               const transcript = await transcribeAudioMessage(msg, this.sock);
               if (transcript) {
@@ -254,7 +274,15 @@ export class WhatsAppChannel implements Channel {
       return;
     }
     try {
-      await this.sock.sendMessage(jid, { audio, mimetype, ptt: true });
+      const sent = await this.sock.sendMessage(jid, { audio, mimetype, ptt: true });
+      if (sent?.key?.id) {
+        this.sentAudioIds.add(sent.key.id);
+        // Prevent unbounded growth
+        if (this.sentAudioIds.size > WhatsAppChannel.MAX_SENT_AUDIO_IDS) {
+          const oldest = this.sentAudioIds.values().next().value;
+          if (oldest) this.sentAudioIds.delete(oldest);
+        }
+      }
       logger.info({ jid, bytes: audio.length }, 'Audio message sent');
     } catch (err) {
       logger.warn({ jid, err }, 'Failed to send audio message');

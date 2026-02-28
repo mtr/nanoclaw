@@ -594,6 +594,114 @@ describe('WhatsAppChannel', () => {
       );
     });
 
+    it('skips transcription for bot-sent audio messages', async () => {
+      vi.mocked(transcribeAudioMessage).mockClear();
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannel(channel);
+
+      // Bot sends audio — sendAudio returns a message with an ID
+      fakeSocket.sendMessage.mockResolvedValueOnce({
+        key: { id: 'bot-audio-1' },
+      });
+      await channel.sendAudio('registered@g.us', Buffer.from('audio'), 'audio/ogg; codecs=opus');
+
+      // The same audio echoes back via messages.upsert
+      await triggerMessages([
+        {
+          key: {
+            id: 'bot-audio-1',
+            remoteJid: 'registered@g.us',
+            fromMe: true,
+          },
+          message: {
+            audioMessage: { mimetype: 'audio/ogg; codecs=opus', ptt: true },
+          },
+          pushName: 'Andy',
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        },
+      ]);
+
+      // Should NOT transcribe
+      expect(transcribeAudioMessage).not.toHaveBeenCalled();
+      // Should store as bot message
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'registered@g.us',
+        expect.objectContaining({
+          is_bot_message: true,
+          content: '[Bot Audio]',
+        }),
+      );
+    });
+
+    it('still transcribes user voice messages normally', async () => {
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannel(channel);
+
+      await triggerMessages([
+        {
+          key: {
+            id: 'user-voice-1',
+            remoteJid: 'registered@g.us',
+            participant: '5551234@s.whatsapp.net',
+            fromMe: false,
+          },
+          message: {
+            audioMessage: { mimetype: 'audio/ogg; codecs=opus', ptt: true },
+          },
+          pushName: 'Frank',
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        },
+      ]);
+
+      expect(transcribeAudioMessage).toHaveBeenCalled();
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'registered@g.us',
+        expect.objectContaining({
+          content: '[Voice: Hello this is a voice message]',
+          is_bot_message: false,
+        }),
+      );
+    });
+
+    it('uses fromMe as fallback for audio sent before restart', async () => {
+      vi.mocked(transcribeAudioMessage).mockClear();
+      // Simulates: bot sent audio, restarted, the echo arrives (ID not tracked)
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannel(channel);
+
+      // Audio with fromMe=true but ID NOT in sentAudioIds
+      await triggerMessages([
+        {
+          key: {
+            id: 'unknown-audio',
+            remoteJid: 'registered@g.us',
+            fromMe: true,
+          },
+          message: {
+            audioMessage: { mimetype: 'audio/ogg; codecs=opus', ptt: true },
+          },
+          pushName: 'Andy',
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        },
+      ]);
+
+      // Should skip transcription (fromMe fallback) and mark as bot
+      expect(transcribeAudioMessage).not.toHaveBeenCalled();
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'registered@g.us',
+        expect.objectContaining({
+          is_bot_message: true,
+          content: '[Bot Audio]',
+        }),
+      );
+    });
+
     it('uses sender JID when pushName is absent', async () => {
       const opts = createTestOpts();
       const channel = new WhatsAppChannel(opts);
