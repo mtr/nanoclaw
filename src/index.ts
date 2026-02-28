@@ -60,11 +60,16 @@ import {
   findChannel,
   formatMessages,
   formatOutbound,
-  slugify,
   stripAudioTags,
   stripInternalTags,
 } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import {
+  fetchPendingMessagesForScope,
+  makeUniqueThreadSlug,
+  resolveHandledCommandCursor,
+  ThreadCommandResult,
+} from './thread-helpers.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -159,9 +164,9 @@ async function handleThreadCommand(
   chatJid: string,
   content: string,
   channel: Channel,
-): Promise<boolean> {
+): Promise<ThreadCommandResult> {
   const match = content.trim().match(THREAD_COMMANDS);
-  if (!match) return false;
+  if (!match) return { handled: false };
 
   const command = match[1];
 
@@ -198,10 +203,7 @@ async function handleThreadCommand(
       `Fresh conversation started.${archivedInfo}`,
     );
 
-    lastAgentTimestamp[chatJid] = now;
-    saveState();
-
-    return true;
+    return { handled: true, cursorTimestamp: now };
   }
 
   if (command === 'threads') {
@@ -211,7 +213,7 @@ async function handleThreadCommand(
         chatJid,
         'No threads yet. Send /new to start one.',
       );
-      return true;
+      return { handled: true };
     }
 
     const lines = threads.map((t, i) => {
@@ -225,14 +227,14 @@ async function handleThreadCommand(
       chatJid,
       `Threads:\n${lines.join('\n')}`,
     );
-    return true;
+    return { handled: true };
   }
 
   if (command === 'resume') {
     const slug = content.trim().split(/\s+/)[1];
     if (!slug) {
       await channel.sendMessage(chatJid, 'Usage: /resume <slug>');
-      return true;
+      return { handled: true };
     }
 
     const target = getThreadBySlug(chatJid, slug);
@@ -241,7 +243,7 @@ async function handleThreadCommand(
         chatJid,
         `Thread "${slug}" not found. Use /threads to list.`,
       );
-      return true;
+      return { handled: true };
     }
 
     if (!target.archived_at) {
@@ -249,7 +251,7 @@ async function handleThreadCommand(
         chatJid,
         `Thread "${slug}" is already active.`,
       );
-      return true;
+      return { handled: true };
     }
 
     const now = new Date().toISOString();
@@ -265,13 +267,10 @@ async function handleThreadCommand(
       `Resumed thread "${target.name}".`,
     );
 
-    lastAgentTimestamp[chatJid] = target.start_timestamp;
-    saveState();
-
-    return true;
+    return { handled: true, cursorTimestamp: target.start_timestamp };
   }
 
-  return false;
+  return { handled: false };
 }
 
 /**
@@ -302,9 +301,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Handle thread commands before agent processing
   for (const msg of missedMessages) {
     if (THREAD_COMMANDS.test(msg.content.trim())) {
-      const handled = await handleThreadCommand(chatJid, msg.content, channel);
-      if (handled) {
-        lastAgentTimestamp[chatJid] = msg.timestamp;
+      const result = await handleThreadCommand(chatJid, msg.content, channel);
+      if (result.handled) {
+        lastAgentTimestamp[chatJid] = resolveHandledCommandCursor(
+          msg.timestamp,
+          result,
+        );
         saveState();
       }
     }
@@ -333,7 +335,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   ) {
     const firstContent = agentMessages[0].content;
     const autoName = firstContent.slice(0, 60).replace(/\n/g, ' ');
-    updateThreadName(activeThread.id, autoName, slugify(autoName));
+    const slug = makeUniqueThreadSlug({
+      chatJid,
+      baseName: autoName,
+      currentThreadId: activeThread.id,
+      findBySlug: getThreadBySlug,
+    });
+    try {
+      updateThreadName(activeThread.id, autoName, slug);
+    } catch (err) {
+      logger.warn(
+        { chatJid, threadId: activeThread.id, slug, err },
+        'Failed to auto-name active thread',
+      );
+    }
   }
 
   // For non-main groups, check if trigger is required and present
@@ -589,14 +604,19 @@ async function startMessageLoop(): Promise<void> {
           }
 
           // Intercept thread commands before piping to container
-          let hadThreadCommand = false;
           for (const msg of groupMessages) {
             if (THREAD_COMMANDS.test(msg.content.trim())) {
-              const handled = await handleThreadCommand(chatJid, msg.content, channel);
-              if (handled) {
-                lastAgentTimestamp[chatJid] = msg.timestamp;
+              const result = await handleThreadCommand(
+                chatJid,
+                msg.content,
+                channel,
+              );
+              if (result.handled) {
+                lastAgentTimestamp[chatJid] = resolveHandledCommandCursor(
+                  msg.timestamp,
+                  result,
+                );
                 saveState();
-                hadThreadCommand = true;
               }
             }
           }
@@ -622,16 +642,15 @@ async function startMessageLoop(): Promise<void> {
 
           // Pull all messages since lastAgentTimestamp so non-trigger
           // context that accumulated between triggers is included.
-          const activeThread = hadThreadCommand ? getActiveThread(chatJid) : undefined;
-          const allPending = activeThread
-            ? getMessagesSinceInThread(
-                chatJid, lastAgentTimestamp[chatJid] || '', ASSISTANT_NAME, activeThread.id,
-              )
-            : getMessagesSince(
-                chatJid,
-                lastAgentTimestamp[chatJid] || '',
-                ASSISTANT_NAME,
-              );
+          const activeThread = getActiveThread(chatJid);
+          const allPending = fetchPendingMessagesForScope({
+            chatJid,
+            sinceTimestamp: lastAgentTimestamp[chatJid] || '',
+            assistantName: ASSISTANT_NAME,
+            activeThreadId: activeThread?.id,
+            getMessagesSince,
+            getMessagesSinceInThread,
+          });
           const messagesToSend =
             allPending.length > 0
               ? allPending.filter(m => !THREAD_COMMANDS.test(m.content.trim()))

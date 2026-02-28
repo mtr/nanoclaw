@@ -13,6 +13,14 @@ from textual.widgets import Footer, Header, Static
 from nanoclaw_tui.api_client import NanoClawClient
 from nanoclaw_tui.audio.player import play_audio
 from nanoclaw_tui.audio.recorder import AudioRecorder
+from nanoclaw_tui.audio.transcriber import VoiceTranscriber
+from nanoclaw_tui.chat_history import (
+    ChatMessage,
+    HistoryCache,
+    merge_messages,
+    normalize_history_message,
+    utc_now_iso,
+)
 from nanoclaw_tui.config import TuiConfig
 from nanoclaw_tui.widgets.chat_view import AgentMessage, UserMessage
 from nanoclaw_tui.widgets.cost_monitor import CostMonitor
@@ -42,6 +50,11 @@ class NanoClawTui(App[None]):
         )
         self.current_jid = self.config.default_jid
         self.recorder = AudioRecorder()
+        self.history_cache = HistoryCache(self.config.history_cache_path)
+        self.transcriber = VoiceTranscriber(
+            api_key=self.config.openai_api_key,
+            model=self.config.transcription_model,
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -56,20 +69,14 @@ class NanoClawTui(App[None]):
         """Start SSE listener, cost polling, and load history."""
         self.run_worker(self._listen_for_events(), exclusive=True)
         self.run_worker(self._poll_cost(), exclusive=False)
+        chat_view = self.query_one("#chat-view", VerticalScroll)
+        status = self.query_one("#status", Static)
+        status.remove()
         try:
-            history = await self.client.get_history(self.current_jid)
-            chat_view = self.query_one("#chat-view")
-            status = self.query_one("#status")
-            status.remove()
-            for msg in history:
-                if msg.get("is_from_me") or msg.get("is_bot_message"):
-                    await chat_view.mount(AgentMessage(msg.get("content", "")))
-                else:
-                    await chat_view.mount(UserMessage(msg.get("content", "")))
-            chat_view.scroll_end(animate=False)
+            await self._load_history_into_view(chat_view)
         except Exception:
-            self.query_one("#status", Static).update(
-                "Failed to connect. Is NanoClaw running?"
+            await chat_view.mount(
+                Static("Failed to connect. Is NanoClaw running?")
             )
 
     async def on_input_submitted(self, event: MessageInput.Submitted) -> None:
@@ -79,24 +86,44 @@ class NanoClawTui(App[None]):
             return
         event.input.value = ""
 
-        chat_view = self.query_one("#chat-view")
-        await chat_view.mount(UserMessage(text))
-        chat_view.scroll_end(animate=False)
+        await self._append_local_message(
+            ChatMessage(
+                role="user",
+                content=text,
+                timestamp=utc_now_iso(),
+            )
+        )
 
         try:
             await self.client.send_message(self.current_jid, text)
         except Exception as e:
+            chat_view = self.query_one("#chat-view", VerticalScroll)
             await chat_view.mount(Static(f"[red]Failed to send: {e}[/red]"))
 
     async def _listen_for_events(self) -> None:
         """Listen for SSE events from NanoClaw."""
         async for event in self.client.stream_events():
-            if event.event == "message" and event.data.get("jid") == self.current_jid:
-                chat_view = self.query_one("#chat-view")
-                await chat_view.mount(
-                    AgentMessage(event.data.get("content", ""))
+            if (
+                event.event == "message"
+                and event.data.get("jid") == self.current_jid
+            ):
+                content = str(event.data.get("content", "")).strip()
+                if not content:
+                    continue
+                await self._append_local_message(
+                    ChatMessage(
+                        role="assistant",
+                        content=content,
+                        timestamp=str(
+                            event.data.get("timestamp") or utc_now_iso()
+                        ),
+                        message_id=(
+                            str(event.data["id"])
+                            if event.data.get("id")
+                            else None
+                        ),
+                    )
                 )
-                chat_view.scroll_end(animate=False)
             elif (
                 event.event == "audio"
                 and event.data.get("jid") == self.current_jid
@@ -129,17 +156,10 @@ class NanoClawTui(App[None]):
     async def on_group_selected(self, event: GroupSelected) -> None:
         """Switch to the selected group conversation."""
         self.current_jid = event.jid
-        chat_view = self.query_one("#chat-view")
+        chat_view = self.query_one("#chat-view", VerticalScroll)
         await chat_view.remove_children()
         try:
-            history = await self.client.get_history(self.current_jid)
-            for msg in history:
-                content = msg.get("content", "")
-                if msg.get("is_from_me") or msg.get("is_bot_message"):
-                    await chat_view.mount(AgentMessage(content))
-                else:
-                    await chat_view.mount(UserMessage(content))
-            chat_view.scroll_end(animate=False)
+            await self._load_history_into_view(chat_view)
         except Exception:
             await chat_view.mount(Static("Failed to load history."))
 
@@ -163,11 +183,33 @@ class NanoClawTui(App[None]):
 
     async def _send_voice(self, audio_data: bytes) -> None:
         """Send recorded audio to NanoClaw."""
-        chat_view = self.query_one("#chat-view")
-        await chat_view.mount(Static("[dim]Sending voice message...[/dim]"))
+        chat_view = self.query_one("#chat-view", VerticalScroll)
+        status = Static("[dim]Transcribing voice message...[/dim]")
+        await chat_view.mount(status)
         chat_view.scroll_end(animate=False)
+        transcript = await self.transcriber.transcribe(audio_data)
+        status.remove()
+        if not transcript:
+            await chat_view.mount(
+                Static(
+                    "[red]Voice transcription failed. "
+                    "Set OPENAI_API_KEY to enable voice sending.[/red]"
+                )
+            )
+            self.notify("Voice transcription failed", severity="error")
+            return
+
+        await self._append_local_message(
+            ChatMessage(
+                role="user",
+                content=f"[Voice transcript] {transcript}",
+                timestamp=utc_now_iso(),
+            )
+        )
         try:
-            await self.client.send_audio(self.current_jid, audio_data)
+            await self.client.send_message(
+                self.current_jid, transcript, msg_type="voice"
+            )
         except Exception as e:
             await chat_view.mount(
                 Static(f"[red]Failed to send voice: {e}[/red]")
@@ -200,6 +242,40 @@ class NanoClawTui(App[None]):
 
     def action_search(self) -> None:
         """Open message search (future enhancement)."""
+
+    async def _load_history_into_view(
+        self, chat_view: VerticalScroll
+    ) -> None:
+        raw_history = await self.client.get_history(self.current_jid)
+        api_messages: list[ChatMessage] = []
+        for payload in raw_history:
+            if not isinstance(payload, dict):
+                continue
+            message = normalize_history_message(payload)
+            if message is not None:
+                api_messages.append(message)
+
+        cached = self.history_cache.load(self.current_jid)
+        merged = merge_messages(api_messages, cached)
+
+        for message in merged:
+            await self._mount_chat_message(chat_view, message)
+        chat_view.scroll_end(animate=False)
+        self.history_cache.store(self.current_jid, merged)
+
+    async def _append_local_message(self, message: ChatMessage) -> None:
+        chat_view = self.query_one("#chat-view", VerticalScroll)
+        await self._mount_chat_message(chat_view, message)
+        chat_view.scroll_end(animate=False)
+        self.history_cache.append(self.current_jid, message)
+
+    async def _mount_chat_message(
+        self, chat_view: VerticalScroll, message: ChatMessage
+    ) -> None:
+        if message.role == "assistant":
+            await chat_view.mount(AgentMessage(message.content))
+            return
+        await chat_view.mount(UserMessage(message.content))
 
 
 def main() -> None:

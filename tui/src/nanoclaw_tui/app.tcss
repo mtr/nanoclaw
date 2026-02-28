@@ -8,6 +8,6 @@ Screen {
 }
 
 MessageInput {
-    dock: bottom;
-    margin: 0 1;
+    height: 3;
+    margin: 0 1 1 1;
 }

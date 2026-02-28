@@ -10,8 +10,8 @@ class MessageInput(Input):
 
     DEFAULT_CSS = """
     MessageInput {
-        dock: bottom;
-        margin: 0 0;
+        height: 3;
+        margin: 0 0 1 0;
     }
     """
 
