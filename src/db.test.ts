@@ -572,7 +572,7 @@ describe('thread management', () => {
     expect(msgs[0].content).toBe('in window');
   });
 
-  it('generates unique slugs when name collides', () => {
+  it('enforces UNIQUE(chat_jid, slug) constraint', () => {
     createThread({
       id: 'ta',
       chat_jid: jid,
@@ -581,20 +581,17 @@ describe('thread management', () => {
       created_at: '2024-01-01T00:00:00.000Z',
       start_timestamp: '2024-01-01T00:00:00.000Z',
     });
-    archiveThread('ta', '2024-01-01T01:00:00.000Z');
 
-    // Second thread with same name should get a different slug
-    createThread({
-      id: 'tb',
-      chat_jid: jid,
-      name: 'Same Name',
-      slug: 'same-name-2',
-      created_at: '2024-01-01T01:00:00.000Z',
-      start_timestamp: '2024-01-01T01:00:00.000Z',
-    });
-
-    const threads = getThreads(jid);
-    const slugs = threads.map((t) => t.slug);
-    expect(new Set(slugs).size).toBe(slugs.length);
+    // Inserting a duplicate slug for the same group should throw
+    expect(() =>
+      createThread({
+        id: 'tb',
+        chat_jid: jid,
+        name: 'Same Name Again',
+        slug: 'same-name',
+        created_at: '2024-01-01T01:00:00.000Z',
+        start_timestamp: '2024-01-01T01:00:00.000Z',
+      }),
+    ).toThrow();
   });
 });

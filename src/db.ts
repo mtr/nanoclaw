@@ -595,6 +595,16 @@ export function getThreadBySlug(
 }
 
 export function resumeThread(threadId: string): void {
+  // Look up the thread to archive any other active thread for the same group
+  const thread = db
+    .prepare(`SELECT chat_jid FROM threads WHERE id = ?`)
+    .get(threadId) as { chat_jid: string } | undefined;
+  if (thread) {
+    const now = new Date().toISOString();
+    db.prepare(
+      `UPDATE threads SET archived_at = ?, end_timestamp = ? WHERE chat_jid = ? AND archived_at IS NULL AND id != ?`,
+    ).run(now, now, thread.chat_jid, threadId);
+  }
   db.prepare(
     `UPDATE threads SET archived_at = NULL, end_timestamp = NULL WHERE id = ?`,
   ).run(threadId);
@@ -660,7 +670,7 @@ export function getThreadMessageCount(threadId: string): number {
     const row = db
       .prepare(
         `SELECT COUNT(*) as count FROM messages
-       WHERE chat_jid = ? AND timestamp >= ? AND timestamp < ?`,
+       WHERE chat_jid = ? AND timestamp > ? AND timestamp < ?`,
       )
       .get(
         thread.chat_jid,
@@ -673,7 +683,7 @@ export function getThreadMessageCount(threadId: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) as count FROM messages
-     WHERE chat_jid = ? AND timestamp >= ?`,
+     WHERE chat_jid = ? AND timestamp > ?`,
     )
     .get(thread.chat_jid, thread.start_timestamp) as { count: number };
   return row.count;
