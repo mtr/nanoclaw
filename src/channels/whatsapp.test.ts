@@ -67,6 +67,7 @@ function createFakeSocket() {
     sendMessage: vi.fn().mockResolvedValue(undefined),
     sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
     groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
+    chatModify: vi.fn().mockResolvedValue(undefined),
     end: vi.fn(),
     // Expose the event emitter for triggering events in tests
     _ev: ev,
@@ -1057,6 +1058,38 @@ describe('WhatsAppChannel', () => {
 
       // Should not throw
       await expect(channel.setTyping('test@g.us', true)).resolves.toBeUndefined();
+    });
+  });
+
+  // --- clearChat ---
+
+  describe('clearChat', () => {
+    it('calls chatModify with clear:true', async () => {
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannel(channel);
+
+      await channel.clearChat('registered@g.us');
+
+      expect(fakeSocket.chatModify).toHaveBeenCalledWith(
+        { clear: true, lastMessages: [] },
+        'registered@g.us',
+      );
+    });
+
+    it('handles clearChat failure gracefully', async () => {
+      fakeSocket.chatModify.mockRejectedValueOnce(new Error('Failed'));
+
+      const opts = createTestOpts();
+      const channel = new WhatsAppChannel(opts);
+
+      await connectChannel(channel);
+
+      // Should not throw
+      await expect(
+        channel.clearChat('registered@g.us'),
+      ).resolves.toBeUndefined();
     });
   });
 

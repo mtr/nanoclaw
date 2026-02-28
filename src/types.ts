@@ -100,6 +100,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: send audio as a voice note (e.g. WhatsApp PTT message).
   sendAudio?(jid: string, audio: Buffer, mimetype: string): Promise<void>;
+  // Optional: clear chat history for the given JID.
+  clearChat?(jid: string): Promise<void>;
 }
 
 /** Base options shared by all channel implementations. */

@@ -292,6 +292,19 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
+  async clearChat(jid: string): Promise<void> {
+    if (!this.connected || !this.sock) {
+      logger.warn({ jid }, 'WA disconnected, cannot clear chat');
+      return;
+    }
+    try {
+      await this.sock.chatModify({ clear: true, lastMessages: [] }, jid);
+      logger.info({ jid }, 'Chat cleared');
+    } catch (err) {
+      logger.warn({ jid, err }, 'Failed to clear chat');
+    }
+  }
+
   isConnected(): boolean {
     return this.connected;
   }
