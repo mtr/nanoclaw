@@ -10,6 +10,7 @@ import {
   RegisteredGroup,
   ScheduledTask,
   TaskRunLog,
+  Thread,
 } from './types.js';
 
 let db: Database.Database;
@@ -95,6 +96,18 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS threads (
+      id TEXT PRIMARY KEY,
+      chat_jid TEXT NOT NULL,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      archived_at TEXT,
+      start_timestamp TEXT NOT NULL,
+      end_timestamp TEXT,
+      UNIQUE(chat_jid, slug)
+    );
+    CREATE INDEX IF NOT EXISTS idx_threads_chat_jid ON threads(chat_jid);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -530,6 +543,152 @@ export function getAllSessions(): Record<string, string> {
     result[row.group_folder] = row.session_id;
   }
   return result;
+}
+
+// --- Thread accessors ---
+
+export function createThread(
+  thread: Omit<Thread, 'archived_at' | 'end_timestamp'>,
+): void {
+  db.prepare(
+    `INSERT INTO threads (id, chat_jid, name, slug, created_at, start_timestamp)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    thread.id,
+    thread.chat_jid,
+    thread.name,
+    thread.slug,
+    thread.created_at,
+    thread.start_timestamp,
+  );
+}
+
+export function archiveThread(threadId: string, endTimestamp: string): void {
+  db.prepare(
+    `UPDATE threads SET archived_at = ?, end_timestamp = ? WHERE id = ?`,
+  ).run(endTimestamp, endTimestamp, threadId);
+}
+
+export function getActiveThread(chatJid: string): Thread | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM threads WHERE chat_jid = ? AND archived_at IS NULL LIMIT 1`,
+    )
+    .get(chatJid) as Thread | undefined;
+}
+
+export function getThreads(chatJid: string): Thread[] {
+  return db
+    .prepare(
+      `SELECT * FROM threads WHERE chat_jid = ? ORDER BY created_at DESC`,
+    )
+    .all(chatJid) as Thread[];
+}
+
+export function getThreadBySlug(
+  chatJid: string,
+  slug: string,
+): Thread | undefined {
+  return db
+    .prepare(`SELECT * FROM threads WHERE chat_jid = ? AND slug = ?`)
+    .get(chatJid, slug) as Thread | undefined;
+}
+
+export function resumeThread(threadId: string): void {
+  db.prepare(
+    `UPDATE threads SET archived_at = NULL, end_timestamp = NULL WHERE id = ?`,
+  ).run(threadId);
+}
+
+export function getMessagesSinceInThread(
+  chatJid: string,
+  sinceTimestamp: string,
+  botPrefix: string,
+  threadId: string,
+): NewMessage[] {
+  const thread = db
+    .prepare(`SELECT * FROM threads WHERE id = ?`)
+    .get(threadId) as Thread | undefined;
+  if (!thread) return [];
+
+  const effectiveSince =
+    sinceTimestamp > thread.start_timestamp
+      ? sinceTimestamp
+      : thread.start_timestamp;
+
+  if (thread.end_timestamp) {
+    return db
+      .prepare(
+        `
+      SELECT id, chat_jid, sender, sender_name, content, timestamp
+      FROM messages
+      WHERE chat_jid = ? AND timestamp > ? AND timestamp < ?
+        AND is_bot_message = 0 AND content NOT LIKE ?
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp
+    `,
+      )
+      .all(
+        chatJid,
+        effectiveSince,
+        thread.end_timestamp,
+        `${botPrefix}:%`,
+      ) as NewMessage[];
+  }
+
+  return db
+    .prepare(
+      `
+    SELECT id, chat_jid, sender, sender_name, content, timestamp
+    FROM messages
+    WHERE chat_jid = ? AND timestamp > ?
+      AND is_bot_message = 0 AND content NOT LIKE ?
+      AND content != '' AND content IS NOT NULL
+    ORDER BY timestamp
+  `,
+    )
+    .all(chatJid, effectiveSince, `${botPrefix}:%`) as NewMessage[];
+}
+
+export function getThreadMessageCount(threadId: string): number {
+  const thread = db
+    .prepare(`SELECT * FROM threads WHERE id = ?`)
+    .get(threadId) as Thread | undefined;
+  if (!thread) return 0;
+
+  if (thread.end_timestamp) {
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) as count FROM messages
+       WHERE chat_jid = ? AND timestamp >= ? AND timestamp < ?`,
+      )
+      .get(
+        thread.chat_jid,
+        thread.start_timestamp,
+        thread.end_timestamp,
+      ) as { count: number };
+    return row.count;
+  }
+
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM messages
+     WHERE chat_jid = ? AND timestamp >= ?`,
+    )
+    .get(thread.chat_jid, thread.start_timestamp) as { count: number };
+  return row.count;
+}
+
+export function updateThreadName(
+  threadId: string,
+  name: string,
+  slug: string,
+): void {
+  db.prepare(`UPDATE threads SET name = ?, slug = ? WHERE id = ?`).run(
+    name,
+    slug,
+    threadId,
+  );
 }
 
 // --- Registered group accessors ---

@@ -3,6 +3,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   _initTestDatabase,
   createTask,
+  createThread,
+  archiveThread,
+  getActiveThread,
+  getThreads,
+  getThreadBySlug,
+  resumeThread,
+  getMessagesSinceInThread,
   deleteTask,
   getAllChats,
   getMessagesSince,
@@ -386,5 +393,208 @@ describe('task CRUD', () => {
 
     deleteTask('task-3');
     expect(getTaskById('task-3')).toBeUndefined();
+  });
+});
+
+// --- Thread management ---
+
+describe('thread management', () => {
+  const jid = 'group@g.us';
+
+  beforeEach(() => {
+    storeChatMetadata(jid, '2024-01-01T00:00:00.000Z');
+  });
+
+  it('creates a thread and retrieves it as active', () => {
+    createThread({
+      id: 't1',
+      chat_jid: jid,
+      name: 'First Topic',
+      slug: 'first-topic',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+
+    const active = getActiveThread(jid);
+    expect(active).toBeDefined();
+    expect(active!.id).toBe('t1');
+    expect(active!.name).toBe('First Topic');
+    expect(active!.slug).toBe('first-topic');
+    expect(active!.archived_at).toBeNull();
+  });
+
+  it('archives the active thread', () => {
+    createThread({
+      id: 't2',
+      chat_jid: jid,
+      name: 'Topic 2',
+      slug: 'topic-2',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+
+    archiveThread('t2', '2024-01-01T01:00:00.000Z');
+
+    const active = getActiveThread(jid);
+    expect(active).toBeUndefined();
+  });
+
+  it('lists all threads for a group ordered by creation desc', () => {
+    createThread({
+      id: 't3',
+      chat_jid: jid,
+      name: 'Old Topic',
+      slug: 'old-topic',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    archiveThread('t3', '2024-01-01T01:00:00.000Z');
+
+    createThread({
+      id: 't4',
+      chat_jid: jid,
+      name: 'New Topic',
+      slug: 'new-topic',
+      created_at: '2024-01-01T01:00:00.000Z',
+      start_timestamp: '2024-01-01T01:00:00.000Z',
+    });
+
+    const threads = getThreads(jid);
+    expect(threads).toHaveLength(2);
+    expect(threads[0].name).toBe('New Topic');
+    expect(threads[1].name).toBe('Old Topic');
+  });
+
+  it('finds thread by slug within a group', () => {
+    createThread({
+      id: 't5',
+      chat_jid: jid,
+      name: 'My Thread',
+      slug: 'my-thread',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+
+    const thread = getThreadBySlug(jid, 'my-thread');
+    expect(thread).toBeDefined();
+    expect(thread!.id).toBe('t5');
+
+    const missing = getThreadBySlug(jid, 'nonexistent');
+    expect(missing).toBeUndefined();
+  });
+
+  it('resumes an archived thread', () => {
+    createThread({
+      id: 't6',
+      chat_jid: jid,
+      name: 'Resumed',
+      slug: 'resumed',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    archiveThread('t6', '2024-01-01T01:00:00.000Z');
+
+    resumeThread('t6');
+
+    const active = getActiveThread(jid);
+    expect(active).toBeDefined();
+    expect(active!.id).toBe('t6');
+    expect(active!.archived_at).toBeNull();
+    expect(active!.end_timestamp).toBeNull();
+  });
+
+  it('gets messages within a thread time window', () => {
+    createThread({
+      id: 't7',
+      chat_jid: jid,
+      name: 'Windowed',
+      slug: 'windowed',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:02.000Z',
+    });
+
+    // Message before thread window
+    store({
+      id: 'before',
+      chat_jid: jid,
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'before thread',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+
+    // Message inside thread window
+    store({
+      id: 'inside',
+      chat_jid: jid,
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'inside thread',
+      timestamp: '2024-01-01T00:00:03.000Z',
+    });
+
+    const msgs = getMessagesSinceInThread(jid, '', 'Andy', 't7');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe('inside thread');
+  });
+
+  it('respects end_timestamp for archived threads', () => {
+    createThread({
+      id: 't8',
+      chat_jid: jid,
+      name: 'Ended',
+      slug: 'ended',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:01.000Z',
+    });
+    archiveThread('t8', '2024-01-01T00:00:03.000Z');
+
+    store({
+      id: 'in-window',
+      chat_jid: jid,
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'in window',
+      timestamp: '2024-01-01T00:00:02.000Z',
+    });
+
+    store({
+      id: 'after-window',
+      chat_jid: jid,
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'after window',
+      timestamp: '2024-01-01T00:00:04.000Z',
+    });
+
+    const msgs = getMessagesSinceInThread(jid, '', 'Andy', 't8');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe('in window');
+  });
+
+  it('generates unique slugs when name collides', () => {
+    createThread({
+      id: 'ta',
+      chat_jid: jid,
+      name: 'Same Name',
+      slug: 'same-name',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    archiveThread('ta', '2024-01-01T01:00:00.000Z');
+
+    // Second thread with same name should get a different slug
+    createThread({
+      id: 'tb',
+      chat_jid: jid,
+      name: 'Same Name',
+      slug: 'same-name-2',
+      created_at: '2024-01-01T01:00:00.000Z',
+      start_timestamp: '2024-01-01T01:00:00.000Z',
+    });
+
+    const threads = getThreads(jid);
+    const slugs = threads.map((t) => t.slug);
+    expect(new Set(slugs).size).toBe(slugs.length);
   });
 });

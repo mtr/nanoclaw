@@ -76,6 +76,17 @@ export interface TaskRunLog {
   error: string | null;
 }
 
+export interface Thread {
+  id: string;
+  chat_jid: string;
+  name: string;
+  slug: string;
+  created_at: string;
+  archived_at: string | null;
+  start_timestamp: string;
+  end_timestamp: string | null;
+}
+
 // --- Channel abstraction ---
 
 export interface Channel {
