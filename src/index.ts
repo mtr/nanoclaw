@@ -266,7 +266,11 @@ async function handleThreadCommand(
     }
 
     if (!target.archived_at) {
-      await broadcastMessage(channel, chatJid, `Thread "${slug}" is already active.`);
+      await broadcastMessage(
+        channel,
+        chatJid,
+        `Thread "${slug}" is already active.`,
+      );
       return { handled: true };
     }
 
@@ -278,7 +282,11 @@ async function handleThreadCommand(
 
     resumeThread(target.id);
     await channel.clearChat?.(chatJid);
-    await broadcastMessage(channel, chatJid, `Resumed thread "${target.name}".`);
+    await broadcastMessage(
+      channel,
+      chatJid,
+      `Resumed thread "${target.name}".`,
+    );
 
     return { handled: true, cursorTimestamp: target.start_timestamp };
   }
