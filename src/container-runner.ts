@@ -14,6 +14,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  THREAD_DOCS_DIR,
   TIMEZONE,
 } from './config.js';
 import { readEnvFile } from './env.js';
@@ -25,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { ensureThreadFolder } from './thread-folder.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -40,6 +42,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
+  threadSlug?: string;
 }
 
 export interface ContainerOutput {
@@ -58,6 +61,7 @@ interface VolumeMount {
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  threadSlug?: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -217,6 +221,16 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
+  // Per-thread document folder (e.g., ~/Documents/Lulu/main/my-thread/)
+  if (threadSlug) {
+    const threadDir = ensureThreadFolder(THREAD_DOCS_DIR, group.folder, threadSlug);
+    mounts.push({
+      hostPath: threadDir,
+      containerPath: '/workspace/thread',
+      readonly: false,
+    });
+  }
+
   return mounts;
 }
 
@@ -271,7 +285,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, input.threadSlug);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName);
