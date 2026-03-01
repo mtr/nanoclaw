@@ -206,6 +206,40 @@ Provide the tweet URL to retweet.`,
     ),
 
     tool(
+      'x_read',
+      `Read a tweet or full thread from X (Twitter). Main group only.
+
+Navigates to the tweet URL and extracts the full thread by the original poster.
+Returns the text content of all tweets in the thread.`,
+      {
+        tweet_url: z.string().describe('The tweet URL (e.g., https://x.com/user/status/123) or tweet ID')
+      },
+      async (args: { tweet_url: string }) => {
+        if (!isMain) {
+          return {
+            content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
+            isError: true
+          };
+        }
+
+        const requestId = `xread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        writeIpcFile(TASKS_DIR, {
+          type: 'x_read',
+          requestId,
+          tweetUrl: args.tweet_url,
+          groupFolder,
+          timestamp: new Date().toISOString()
+        });
+
+        const result = await waitForResult(requestId, 120000);
+        return {
+          content: [{ type: 'text', text: result.message }],
+          isError: !result.success
+        };
+      }
+    ),
+
+    tool(
       'x_quote',
       `Quote tweet on X (Twitter). Main group only.
 

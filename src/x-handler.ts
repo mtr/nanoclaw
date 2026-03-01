@@ -1,58 +1,68 @@
 /**
- * X Integration IPC Handler
+ * X Integration IPC Handler (host side)
  *
- * Handles all x_* IPC messages from container agents.
- * This is the entry point for X integration in the host process.
+ * Handles x_* IPC messages from container agents by spawning
+ * Playwright scripts in .claude/skills/x-integration/scripts/.
  */
 
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import pino from 'pino';
 
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } }
-});
+import { logger } from './logger.js';
 
-interface SkillResult {
+interface ScriptResult {
   success: boolean;
   message: string;
   data?: unknown;
 }
 
-// Run a skill script as subprocess
-async function runScript(script: string, args: object): Promise<SkillResult> {
-  const scriptPath = path.join(process.cwd(), '.claude', 'skills', 'x-integration', 'scripts', `${script}.ts`);
+async function runScript(script: string, args: object): Promise<ScriptResult> {
+  const scriptPath = path.join(
+    process.cwd(),
+    '.claude',
+    'skills',
+    'x-integration',
+    'scripts',
+    `${script}.ts`,
+  );
 
   return new Promise((resolve) => {
     const proc = spawn('npx', ['tsx', scriptPath], {
       cwd: process.cwd(),
       env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     let stdout = '';
-    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
     proc.stdin.write(JSON.stringify(args));
     proc.stdin.end();
 
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
       resolve({ success: false, message: 'Script timed out (120s)' });
-    }, 120000);
+    }, 120_000);
 
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        resolve({ success: false, message: `Script exited with code: ${code}` });
+        resolve({
+          success: false,
+          message: `Script exited with code: ${code}`,
+        });
         return;
       }
       try {
         const lines = stdout.trim().split('\n');
         resolve(JSON.parse(lines[lines.length - 1]));
       } catch {
-        resolve({ success: false, message: `Failed to parse output: ${stdout.slice(0, 200)}` });
+        resolve({
+          success: false,
+          message: `Failed to parse output: ${stdout.slice(0, 200)}`,
+        });
       }
     });
 
@@ -63,32 +73,33 @@ async function runScript(script: string, args: object): Promise<SkillResult> {
   });
 }
 
-// Write result to IPC results directory
-function writeResult(dataDir: string, sourceGroup: string, requestId: string, result: SkillResult): void {
+function writeResult(
+  dataDir: string,
+  sourceGroup: string,
+  requestId: string,
+  result: ScriptResult,
+): void {
   const resultsDir = path.join(dataDir, 'ipc', sourceGroup, 'x_results');
   fs.mkdirSync(resultsDir, { recursive: true });
-  fs.writeFileSync(path.join(resultsDir, `${requestId}.json`), JSON.stringify(result));
+  fs.writeFileSync(
+    path.join(resultsDir, `${requestId}.json`),
+    JSON.stringify(result),
+  );
 }
 
 /**
- * Handle X integration IPC messages
- *
- * @returns true if message was handled, false if not an X message
+ * Handle X integration IPC messages.
+ * @returns true if message was handled, false if not an X message.
  */
 export async function handleXIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
   isMain: boolean,
-  dataDir: string
+  dataDir: string,
 ): Promise<boolean> {
   const type = data.type as string;
+  if (!type?.startsWith('x_')) return false;
 
-  // Only handle x_* types
-  if (!type?.startsWith('x_')) {
-    return false;
-  }
-
-  // Only main group can use X integration
   if (!isMain) {
     logger.warn({ sourceGroup, type }, 'X integration blocked: not main group');
     return true;
@@ -102,7 +113,7 @@ export async function handleXIpc(
 
   logger.info({ type, requestId }, 'Processing X request');
 
-  let result: SkillResult;
+  let result: ScriptResult;
 
   switch (type) {
     case 'x_post':
@@ -126,7 +137,10 @@ export async function handleXIpc(
         result = { success: false, message: 'Missing tweetUrl or content' };
         break;
       }
-      result = await runScript('reply', { tweetUrl: data.tweetUrl, content: data.content });
+      result = await runScript('reply', {
+        tweetUrl: data.tweetUrl,
+        content: data.content,
+      });
       break;
 
     case 'x_retweet':
@@ -142,7 +156,10 @@ export async function handleXIpc(
         result = { success: false, message: 'Missing tweetUrl or comment' };
         break;
       }
-      result = await runScript('quote', { tweetUrl: data.tweetUrl, comment: data.comment });
+      result = await runScript('quote', {
+        tweetUrl: data.tweetUrl,
+        comment: data.comment,
+      });
       break;
 
     case 'x_read':
@@ -161,7 +178,10 @@ export async function handleXIpc(
   if (result.success) {
     logger.info({ type, requestId }, 'X request completed');
   } else {
-    logger.error({ type, requestId, message: result.message }, 'X request failed');
+    logger.error(
+      { type, requestId, message: result.message },
+      'X request failed',
+    );
   }
   return true;
 }
