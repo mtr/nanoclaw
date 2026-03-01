@@ -64,6 +64,7 @@ import {
   stripAudioTags,
   stripInternalTags,
 } from './router.js';
+import { migrateExistingThreads } from './migrate-thread-slugs.js';
 import { generateThreadSlug } from './slug-generator.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { ensureThreadFolder, renameThreadFolder } from './thread-folder.js';
@@ -180,7 +181,7 @@ export function _setRegisteredGroups(
   registeredGroups = groups;
 }
 
-const THREAD_COMMANDS = /^\/(new|reset|threads|resume)\b/;
+const THREAD_COMMANDS = /^\/(new|reset|threads|resume|migrate-threads)\b/;
 
 async function handleThreadCommand(
   chatJid: string,
@@ -295,6 +296,17 @@ async function handleThreadCommand(
     );
 
     return { handled: true, cursorTimestamp: target.start_timestamp };
+  }
+
+  if (command === 'migrate-threads') {
+    const chatJids = Object.keys(registeredGroups);
+    const { migrated, failed } = await migrateExistingThreads(chatJids);
+    await broadcastMessage(
+      channel,
+      chatJid,
+      `Migration complete: ${migrated} threads migrated, ${failed} failed.`,
+    );
+    return { handled: true };
   }
 
   return { handled: false };
