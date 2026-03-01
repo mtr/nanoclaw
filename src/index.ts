@@ -85,7 +85,9 @@ let messageLoopRunning = false;
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
-let pushSseEvent: ((event: string, data: Record<string, unknown>) => void) | null = null;
+let pushSseEvent:
+  | ((event: string, data: Record<string, unknown>) => void)
+  | null = null;
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -223,10 +225,7 @@ async function handleThreadCommand(
       return `${i + 1}. ${t.slug}${status} — "${t.name}" (${date}, ${count} msgs)`;
     });
 
-    await channel.sendMessage(
-      chatJid,
-      `Threads:\n${lines.join('\n')}`,
-    );
+    await channel.sendMessage(chatJid, `Threads:\n${lines.join('\n')}`);
     return { handled: true };
   }
 
@@ -247,10 +246,7 @@ async function handleThreadCommand(
     }
 
     if (!target.archived_at) {
-      await channel.sendMessage(
-        chatJid,
-        `Thread "${slug}" is already active.`,
-      );
+      await channel.sendMessage(chatJid, `Thread "${slug}" is already active.`);
       return { handled: true };
     }
 
@@ -262,10 +258,7 @@ async function handleThreadCommand(
 
     resumeThread(target.id);
     await channel.clearChat?.(chatJid);
-    await channel.sendMessage(
-      chatJid,
-      `Resumed thread "${target.name}".`,
-    );
+    await channel.sendMessage(chatJid, `Resumed thread "${target.name}".`);
 
     return { handled: true, cursorTimestamp: target.start_timestamp };
   }
@@ -316,13 +309,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const activeThread = getActiveThread(chatJid);
   const threadMessages = activeThread
     ? getMessagesSinceInThread(
-        chatJid, lastAgentTimestamp[chatJid] || '', ASSISTANT_NAME, activeThread.id,
+        chatJid,
+        lastAgentTimestamp[chatJid] || '',
+        ASSISTANT_NAME,
+        activeThread.id,
       )
     : missedMessages;
 
   // Filter out thread commands from agent input
   const agentMessages = threadMessages.filter(
-    m => !THREAD_COMMANDS.test(m.content.trim()),
+    (m) => !THREAD_COMMANDS.test(m.content.trim()),
   );
 
   if (agentMessages.length === 0) return true;
@@ -391,64 +387,73 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, activeThread?.id, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip internal reasoning, then extract TTS text and clean display text
-      const stripped = stripInternalTags(raw);
-      const spokenText = extractSpokenText(stripped);
-      const text = stripAudioTags(stripped).trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
-      }
-      // TTS: synthesize and send audio if <audio> tags were present
-      if (spokenText) {
-        try {
-          if (isTtsEnabled()) {
-            const budget = checkBudget();
-            if (budget.ttsAllowed) {
-              const result = await synthesizeSpeech(spokenText);
-              if (result) {
-                await channel.sendAudio?.(
-                  chatJid,
-                  result.audio,
-                  'audio/ogg; codecs=opus',
-                );
-                const audioId = saveAudioFile(result.audio);
-                recordTtsUsage({
-                  characters: result.characterCount,
-                  costEstimate: result.characterCount * 0.000015,
-                  model: 'gpt-4o-mini-tts',
-                });
-                pushSseEvent?.('audio', {
-                  jid: chatJid,
-                  audioUrl: `/api/audio/${audioId}`,
-                });
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    activeThread?.id,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip internal reasoning, then extract TTS text and clean display text
+        const stripped = stripInternalTags(raw);
+        const spokenText = extractSpokenText(stripped);
+        const text = stripAudioTags(stripped).trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // TTS: synthesize and send audio if <audio> tags were present
+        if (spokenText) {
+          try {
+            if (isTtsEnabled()) {
+              const budget = checkBudget();
+              if (budget.ttsAllowed) {
+                const result = await synthesizeSpeech(spokenText);
+                if (result) {
+                  await channel.sendAudio?.(
+                    chatJid,
+                    result.audio,
+                    'audio/ogg; codecs=opus',
+                  );
+                  const audioId = saveAudioFile(result.audio);
+                  recordTtsUsage({
+                    characters: result.characterCount,
+                    costEstimate: result.characterCount * 0.000015,
+                    model: 'gpt-4o-mini-tts',
+                  });
+                  pushSseEvent?.('audio', {
+                    jid: chatJid,
+                    audioUrl: `/api/audio/${audioId}`,
+                  });
+                }
               }
             }
+          } catch (err) {
+            logger.error({ err }, 'TTS processing failed');
           }
-        } catch (err) {
-          logger.error({ err }, 'TTS processing failed');
         }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -624,7 +629,7 @@ async function startMessageLoop(): Promise<void> {
 
           // Filter out thread commands from messages to pipe
           const nonCommandMessages = groupMessages.filter(
-            m => !THREAD_COMMANDS.test(m.content.trim()),
+            (m) => !THREAD_COMMANDS.test(m.content.trim()),
           );
           if (nonCommandMessages.length === 0) continue;
 
@@ -654,7 +659,9 @@ async function startMessageLoop(): Promise<void> {
           });
           const messagesToSend =
             allPending.length > 0
-              ? allPending.filter(m => !THREAD_COMMANDS.test(m.content.trim()))
+              ? allPending.filter(
+                  (m) => !THREAD_COMMANDS.test(m.content.trim()),
+                )
               : nonCommandMessages;
           if (messagesToSend.length === 0) continue;
           const formatted = formatMessages(messagesToSend);
@@ -778,13 +785,20 @@ async function main(): Promise<void> {
         cliChannel,
         getGroups: () => registeredGroups,
         getHistory: (jid, limit) => {
-          const messages = getMessagesSince(jid, new Date(0).toISOString(), ASSISTANT_NAME);
+          const messages = getMessagesSince(
+            jid,
+            new Date(0).toISOString(),
+            ASSISTANT_NAME,
+          );
           return limit ? messages.slice(-limit) : messages;
         },
       });
       pushSseEvent = api.pushSseEvent;
       api.server.on('error', (err) => {
-        logger.error({ err, port: API_PORT }, 'HTTP API server failed to start');
+        logger.error(
+          { err, port: API_PORT },
+          'HTTP API server failed to start',
+        );
       });
       api.server.listen(API_PORT, '127.0.0.1', () => {
         logger.info({ port: API_PORT }, 'HTTP API server listening');

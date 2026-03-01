@@ -700,11 +700,9 @@ export function getThreadMessageCount(threadId: string): number {
         `SELECT COUNT(*) as count FROM messages
        WHERE chat_jid = ? AND timestamp > ? AND timestamp < ?`,
       )
-      .get(
-        thread.chat_jid,
-        thread.start_timestamp,
-        thread.end_timestamp,
-      ) as { count: number };
+      .get(thread.chat_jid, thread.start_timestamp, thread.end_timestamp) as {
+      count: number;
+    };
     return row.count;
   }
 

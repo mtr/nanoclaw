@@ -45,7 +45,11 @@ export async function synthesizeSpeech(
   text: string,
   config?: TtsConfig,
 ): Promise<TtsResult | null> {
-  const env = readEnvFile(['OPENAI_API_KEY', 'OPENAI_TTS_VOICE', 'OPENAI_TTS_MODEL']);
+  const env = readEnvFile([
+    'OPENAI_API_KEY',
+    'OPENAI_TTS_VOICE',
+    'OPENAI_TTS_MODEL',
+  ]);
   const apiKey = env.OPENAI_API_KEY;
   if (!apiKey) {
     logger.warn('OPENAI_API_KEY not set — TTS unavailable');
@@ -55,7 +59,8 @@ export async function synthesizeSpeech(
   const voice = config?.voice || env.OPENAI_TTS_VOICE || DEFAULT_CONFIG.voice!;
   const model = config?.model || env.OPENAI_TTS_MODEL || DEFAULT_CONFIG.model!;
   const instructions = config?.instructions || loadInstructions();
-  const responseFormat = config?.responseFormat || DEFAULT_CONFIG.responseFormat!;
+  const responseFormat =
+    config?.responseFormat || DEFAULT_CONFIG.responseFormat!;
 
   try {
     const OpenAI = (await import('openai')).default;

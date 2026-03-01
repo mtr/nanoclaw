@@ -65,10 +65,7 @@ export function createApiServer(opts: ApiServerOpts): ApiServer {
 
   const sseClients: SseClient[] = [];
 
-  function pushSseEvent(
-    event: string,
-    data: Record<string, unknown>,
-  ): void {
+  function pushSseEvent(event: string, data: Record<string, unknown>): void {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const client of sseClients) {
       client.res.write(payload);
@@ -202,9 +199,8 @@ export function createApiServer(opts: ApiServerOpts): ApiServer {
 
       // GET /api/cost/summary
       if (req.method === 'GET' && pathname === '/api/cost/summary') {
-        const { getTtsUsageSummary, checkBudget } = await import(
-          './cost-tracker.js'
-        );
+        const { getTtsUsageSummary, checkBudget } =
+          await import('./cost-tracker.js');
         jsonResponse(res, 200, {
           usage: getTtsUsageSummary(),
           budget: checkBudget(),

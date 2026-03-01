@@ -63,9 +63,7 @@ export function getTtsUsageSummary(): UsageSummary {
   return {
     today: query(`date(timestamp) = date('now')`),
     thisWeek: query(`timestamp >= datetime('now', 'weekday 0', '-7 days')`),
-    thisMonth: query(
-      `strftime('%Y-%m', timestamp) = strftime('%Y-%m', 'now')`,
-    ),
+    thisMonth: query(`strftime('%Y-%m', timestamp) = strftime('%Y-%m', 'now')`),
   };
 }
 

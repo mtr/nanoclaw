@@ -110,7 +110,7 @@ describe('makeUniqueThreadSlug', () => {
   });
 
   it('allows keeping the same slug for the same thread id', () => {
-    const findBySlug = vi.fn(() => ({ id: 't-current' } as Thread));
+    const findBySlug = vi.fn(() => ({ id: 't-current' }) as Thread);
     const slug = makeUniqueThreadSlug({
       chatJid: 'group@g.us',
       baseName: 'Current title',
