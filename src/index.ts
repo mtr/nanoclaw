@@ -89,6 +89,23 @@ let pushSseEvent:
   | ((event: string, data: Record<string, unknown>) => void)
   | null = null;
 
+/** Send via the owning channel AND mirror to SSE for TUI consumers. */
+async function broadcastMessage(
+  channel: Channel,
+  jid: string,
+  text: string,
+): Promise<void> {
+  await channel.sendMessage(jid, text);
+  if (!jid.startsWith('cli:') && pushSseEvent) {
+    pushSseEvent('message', {
+      jid,
+      content: text,
+      audioUrl: null,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
   const agentTs = getRouterState('last_agent_timestamp');
@@ -872,6 +889,16 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 }
+
+/** @internal Test-only setter for pushSseEvent */
+export function _setPushSseEvent(
+  fn: ((event: string, data: Record<string, unknown>) => void) | null,
+): void {
+  pushSseEvent = fn;
+}
+
+/** @internal Test-only access to broadcastMessage */
+export const _broadcastMessage = broadcastMessage;
 
 // Guard: only run when executed directly, not when imported by tests
 const isDirectRun =

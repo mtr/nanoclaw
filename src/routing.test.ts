@@ -1,7 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import { _initTestDatabase, getAllChats, storeChatMetadata } from './db.js';
-import { getAvailableGroups, _setRegisteredGroups } from './index.js';
+import {
+  getAvailableGroups,
+  _setRegisteredGroups,
+  _broadcastMessage,
+  _setPushSseEvent,
+} from './index.js';
 
 beforeEach(() => {
   _initTestDatabase();
@@ -166,5 +171,50 @@ describe('getAvailableGroups', () => {
   it('returns empty array when no chats exist', () => {
     const groups = getAvailableGroups();
     expect(groups).toHaveLength(0);
+  });
+});
+
+// --- broadcastMessage ---
+
+describe('broadcastMessage', () => {
+  it('mirrors to SSE for non-cli JIDs', async () => {
+    const sseSpy = vi.fn();
+    _setPushSseEvent(sseSpy);
+
+    const fakeChannel = { sendMessage: vi.fn() } as any;
+    await _broadcastMessage(fakeChannel, 'group@g.us', 'Hello');
+
+    expect(fakeChannel.sendMessage).toHaveBeenCalledWith('group@g.us', 'Hello');
+    expect(sseSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        jid: 'group@g.us',
+        content: 'Hello',
+      }),
+    );
+  });
+
+  it('skips SSE mirror for cli: JIDs', async () => {
+    const sseSpy = vi.fn();
+    _setPushSseEvent(sseSpy);
+
+    const fakeChannel = { sendMessage: vi.fn() } as any;
+    await _broadcastMessage(fakeChannel, 'cli:main', 'Hello');
+
+    expect(fakeChannel.sendMessage).toHaveBeenCalledWith('cli:main', 'Hello');
+    expect(sseSpy).not.toHaveBeenCalled();
+  });
+
+  it('works when pushSseEvent is null', async () => {
+    _setPushSseEvent(null);
+
+    const fakeChannel = { sendMessage: vi.fn() } as any;
+    await _broadcastMessage(fakeChannel, 'group@g.us', 'Hello');
+
+    expect(fakeChannel.sendMessage).toHaveBeenCalledWith(
+      'group@g.us',
+      'Hello',
+    );
+    // No error thrown
   });
 });
