@@ -20,6 +20,7 @@
     "tui": "bash scripts/start-tui.sh"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.8.1",
     "cron-parser": "^5.5.0",
