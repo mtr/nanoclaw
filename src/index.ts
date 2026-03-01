@@ -217,7 +217,8 @@ async function handleThreadCommand(
     const archivedInfo = active
       ? ` Previous thread "${active.name}" archived.`
       : '';
-    await channel.sendMessage(
+    await broadcastMessage(
+      channel,
       chatJid,
       `Fresh conversation started.${archivedInfo}`,
     );
@@ -228,7 +229,8 @@ async function handleThreadCommand(
   if (command === 'threads') {
     const threads = getThreads(chatJid);
     if (threads.length === 0) {
-      await channel.sendMessage(
+      await broadcastMessage(
+        channel,
         chatJid,
         'No threads yet. Send /new to start one.',
       );
@@ -242,20 +244,21 @@ async function handleThreadCommand(
       return `${i + 1}. ${t.slug}${status} — "${t.name}" (${date}, ${count} msgs)`;
     });
 
-    await channel.sendMessage(chatJid, `Threads:\n${lines.join('\n')}`);
+    await broadcastMessage(channel, chatJid, `Threads:\n${lines.join('\n')}`);
     return { handled: true };
   }
 
   if (command === 'resume') {
     const slug = content.trim().split(/\s+/)[1];
     if (!slug) {
-      await channel.sendMessage(chatJid, 'Usage: /resume <slug>');
+      await broadcastMessage(channel, chatJid, 'Usage: /resume <slug>');
       return { handled: true };
     }
 
     const target = getThreadBySlug(chatJid, slug);
     if (!target) {
-      await channel.sendMessage(
+      await broadcastMessage(
+        channel,
         chatJid,
         `Thread "${slug}" not found. Use /threads to list.`,
       );
@@ -263,7 +266,7 @@ async function handleThreadCommand(
     }
 
     if (!target.archived_at) {
-      await channel.sendMessage(chatJid, `Thread "${slug}" is already active.`);
+      await broadcastMessage(channel, chatJid, `Thread "${slug}" is already active.`);
       return { handled: true };
     }
 
@@ -275,7 +278,7 @@ async function handleThreadCommand(
 
     resumeThread(target.id);
     await channel.clearChat?.(chatJid);
-    await channel.sendMessage(chatJid, `Resumed thread "${target.name}".`);
+    await broadcastMessage(channel, chatJid, `Resumed thread "${target.name}".`);
 
     return { handled: true, cursorTimestamp: target.start_timestamp };
   }
@@ -425,7 +428,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           `Agent output: ${raw.slice(0, 200)}`,
         );
         if (text) {
-          await channel.sendMessage(chatJid, text);
+          await broadcastMessage(channel, chatJid, text);
           outputSentToUser = true;
         }
         // TTS: synthesize and send audio if <audio> tags were present
@@ -865,14 +868,14 @@ async function main(): Promise<void> {
         return;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) await broadcastMessage(channel, jid, text);
     },
   });
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      return broadcastMessage(channel, jid, text);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
