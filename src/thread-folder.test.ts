@@ -30,14 +30,26 @@ describe('renameThreadFolder', () => {
     const oldPath = ensureThreadFolder(TEST_BASE, 'main', 'old-slug');
     fs.writeFileSync(path.join(oldPath, 'test.md'), 'hello');
 
-    const newPath = renameThreadFolder(TEST_BASE, 'main', 'old-slug', 'new-slug');
+    const newPath = renameThreadFolder(
+      TEST_BASE,
+      'main',
+      'old-slug',
+      'new-slug',
+    );
     expect(fs.existsSync(newPath)).toBe(true);
     expect(fs.existsSync(oldPath)).toBe(false);
-    expect(fs.readFileSync(path.join(newPath, 'test.md'), 'utf-8')).toBe('hello');
+    expect(fs.readFileSync(path.join(newPath, 'test.md'), 'utf-8')).toBe(
+      'hello',
+    );
   });
 
   it('creates new folder if old does not exist', () => {
-    const newPath = renameThreadFolder(TEST_BASE, 'main', 'nonexistent', 'new-slug');
+    const newPath = renameThreadFolder(
+      TEST_BASE,
+      'main',
+      'nonexistent',
+      'new-slug',
+    );
     expect(fs.existsSync(newPath)).toBe(true);
   });
 

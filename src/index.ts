@@ -10,6 +10,7 @@ import {
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
+  THREAD_DOCS_DIR,
   TRIGGER_PATTERN,
 } from './config.js';
 import { CliChannel } from './channels/cli.js';
@@ -63,7 +64,9 @@ import {
   stripAudioTags,
   stripInternalTags,
 } from './router.js';
+import { generateThreadSlug } from './slug-generator.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { ensureThreadFolder, renameThreadFolder } from './thread-folder.js';
 import {
   fetchPendingMessagesForScope,
   makeUniqueThreadSlug,
@@ -183,6 +186,7 @@ async function handleThreadCommand(
   chatJid: string,
   content: string,
   channel: Channel,
+  groupFolder: string,
 ): Promise<ThreadCommandResult> {
   const match = content.trim().match(THREAD_COMMANDS);
   if (!match) return { handled: false };
@@ -202,7 +206,7 @@ async function handleThreadCommand(
     }
 
     const newId = randomUUID();
-    const newSlug = `thread-${Date.now()}`;
+    const newSlug = now.slice(0, 16).replace(/:/g, '-');
     createThread({
       id: newId,
       chat_jid: chatJid,
@@ -211,6 +215,8 @@ async function handleThreadCommand(
       created_at: now,
       start_timestamp: now,
     });
+
+    ensureThreadFolder(THREAD_DOCS_DIR, groupFolder, newSlug);
 
     await channel.clearChat?.(chatJid);
 
@@ -322,7 +328,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Handle thread commands before agent processing
   for (const msg of missedMessages) {
     if (THREAD_COMMANDS.test(msg.content.trim())) {
-      const result = await handleThreadCommand(chatJid, msg.content, channel);
+      const result = await handleThreadCommand(
+        chatJid,
+        msg.content,
+        channel,
+        group.folder,
+      );
       if (result.handled) {
         lastAgentTimestamp[chatJid] = resolveHandledCommandCursor(
           msg.timestamp,
@@ -351,22 +362,46 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (agentMessages.length === 0) return true;
 
-  // Auto-name thread from first user message
+  // Auto-name thread from first user message using LLM
   if (
     activeThread &&
     activeThread.name === 'New conversation' &&
     agentMessages.length > 0
   ) {
     const firstContent = agentMessages[0].content;
-    const autoName = firstContent.slice(0, 60).replace(/\n/g, ' ');
-    const slug = makeUniqueThreadSlug({
-      chatJid,
-      baseName: autoName,
-      currentThreadId: activeThread.id,
-      findBySlug: getThreadBySlug,
-    });
+    const existingSlugs = getThreads(chatJid).map((t) => t.slug);
+
+    const secrets = readEnvFile(['ANTHROPIC_API_KEY']);
+    const apiKey = secrets.ANTHROPIC_API_KEY;
+
+    let slug: string;
+    if (apiKey) {
+      const llmSlug = await generateThreadSlug(
+        firstContent,
+        apiKey,
+        existingSlugs,
+      );
+      slug = makeUniqueThreadSlug({
+        chatJid,
+        baseName: llmSlug,
+        currentThreadId: activeThread.id,
+        findBySlug: getThreadBySlug,
+      });
+    } else {
+      const autoName = firstContent.slice(0, 60).replace(/\n/g, ' ');
+      slug = makeUniqueThreadSlug({
+        chatJid,
+        baseName: autoName,
+        currentThreadId: activeThread.id,
+        findBySlug: getThreadBySlug,
+      });
+    }
+
+    const displayName = slug.replace(/-/g, ' ');
     try {
-      updateThreadName(activeThread.id, autoName, slug);
+      const oldSlug = activeThread.slug;
+      updateThreadName(activeThread.id, displayName, slug);
+      renameThreadFolder(THREAD_DOCS_DIR, group.folder, oldSlug, slug);
     } catch (err) {
       logger.warn(
         { chatJid, threadId: activeThread.id, slug, err },
@@ -644,6 +679,7 @@ async function startMessageLoop(): Promise<void> {
                 chatJid,
                 msg.content,
                 channel,
+                group.folder,
               );
               if (result.handled) {
                 lastAgentTimestamp[chatJid] = resolveHandledCommandCursor(
