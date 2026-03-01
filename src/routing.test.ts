@@ -211,10 +211,7 @@ describe('broadcastMessage', () => {
     const fakeChannel = { sendMessage: vi.fn() } as any;
     await _broadcastMessage(fakeChannel, 'group@g.us', 'Hello');
 
-    expect(fakeChannel.sendMessage).toHaveBeenCalledWith(
-      'group@g.us',
-      'Hello',
-    );
+    expect(fakeChannel.sendMessage).toHaveBeenCalledWith('group@g.us', 'Hello');
     // No error thrown
   });
 });
