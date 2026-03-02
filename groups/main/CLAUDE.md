@@ -92,6 +92,7 @@ Main has read-only access to the project and read-write access to its group fold
 |----------------|-----------|--------|
 | `/workspace/project` | Project root | read-only |
 | `/workspace/group` | `groups/main/` | read-write |
+| `/workspace/thread` | `~/Documents/Lulu/main/{thread-slug}` | read-write — per-conversation file storage |
 | `/workspace/extra/projects` | `~/projects` | read-write |
 | `/workspace/extra/Documents` | `~/Documents` | read-write |
 
