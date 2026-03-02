@@ -29,9 +29,11 @@ export async function migrateExistingThreads(
     const existingSlugs = threads.map((t) => t.slug);
 
     for (const thread of threads) {
-      // Skip threads that already have a non-timestamp slug
-      if (!thread.slug.startsWith('thread-') && !thread.slug.startsWith('20')) {
-        // Already has a content-based slug — just ensure folder exists
+      // Skip the "default" thread and threads with short LLM-generated slugs
+      // (4 words or fewer). Old slugs are either timestamp-based (thread-*, 20*)
+      // or long truncated messages from slugify() — both need migration.
+      const wordCount = thread.slug.split('-').length;
+      if (thread.slug === 'default' || (wordCount <= 5 && !thread.slug.startsWith('thread-') && !thread.slug.startsWith('20'))) {
         const groupFolder = chatJid.startsWith('cli:') ? 'cli' : 'main';
         ensureThreadFolder(THREAD_DOCS_DIR, groupFolder, thread.slug);
         continue;
