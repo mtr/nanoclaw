@@ -39,6 +39,12 @@ class NanoClawTui(App[None]):
         Binding("ctrl+g", "toggle_sidebar", "Groups"),
         Binding("ctrl+r", "search", "Search"),
         Binding("ctrl+space", "toggle_recording", "Voice", show=True),
+        Binding(
+            "ctrl+shift+c",
+            "copy_selection_or_focused_input",
+            "Copy selected text",
+            show=False,
+        ),
     ]
 
     def __init__(self, config: TuiConfig | None = None) -> None:
@@ -78,12 +84,14 @@ class NanoClawTui(App[None]):
             await chat_view.mount(
                 Static("Failed to connect. Is NanoClaw running?")
             )
+        self.query_one("#message-input", MessageInput).focus()
 
     async def on_input_submitted(self, event: MessageInput.Submitted) -> None:
         """Handle message submission."""
         text = event.value.strip()
         if not text:
             return
+        event.input.record_submission(text)
         event.input.value = ""
 
         await self._append_local_message(
@@ -242,6 +250,20 @@ class NanoClawTui(App[None]):
 
     def action_search(self) -> None:
         """Open message search (future enhancement)."""
+
+    def action_copy_selection_or_focused_input(self) -> None:
+        """Copy selected text from chat selection, or from focused input."""
+        selection = self.screen.get_selected_text()
+        if selection is not None:
+            self.copy_to_clipboard(selection)
+            return
+
+        focused = self.focused
+        copy_action = (
+            getattr(focused, "action_copy", None) if focused is not None else None
+        )
+        if callable(copy_action):
+            copy_action()
 
     async def _load_history_into_view(
         self, chat_view: VerticalScroll
