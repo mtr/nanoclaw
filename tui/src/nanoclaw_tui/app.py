@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from textual import on
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -86,13 +88,16 @@ class NanoClawTui(App[None]):
             )
         self.query_one("#message-input", MessageInput).focus()
 
-    async def on_input_submitted(self, event: MessageInput.Submitted) -> None:
+    @on(MessageInput.Submitted)
+    async def on_message_input_submitted(
+        self, event: MessageInput.Submitted
+    ) -> None:
         """Handle message submission."""
         text = event.value.strip()
         if not text:
             return
         event.input.record_submission(text)
-        event.input.value = ""
+        event.input.text = ""
 
         await self._append_local_message(
             ChatMessage(
@@ -263,7 +268,10 @@ class NanoClawTui(App[None]):
             getattr(focused, "action_copy", None) if focused is not None else None
         )
         if callable(copy_action):
-            copy_action()
+            try:
+                copy_action()
+            except SkipAction:
+                return
 
     async def _load_history_into_view(
         self, chat_view: VerticalScroll
