@@ -30,10 +30,7 @@ export async function migrateExistingThreads(
 
     for (const thread of threads) {
       // Skip threads that already have a non-timestamp slug
-      if (
-        !thread.slug.startsWith('thread-') &&
-        !thread.slug.startsWith('20')
-      ) {
+      if (!thread.slug.startsWith('thread-') && !thread.slug.startsWith('20')) {
         // Already has a content-based slug — just ensure folder exists
         const groupFolder = chatJid.startsWith('cli:') ? 'cli' : 'main';
         ensureThreadFolder(THREAD_DOCS_DIR, groupFolder, thread.slug);
