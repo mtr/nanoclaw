@@ -49,53 +49,50 @@ async function readThread(input: ReadInput): Promise<ScriptResult> {
       .textContent()
       .catch(() => null);
 
-    // Scroll down to load the full thread
-    for (let i = 0; i < 10; i++) {
-      const prevCount = await page.locator('article[data-testid="tweet"]').count();
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await page.waitForTimeout(1500);
-      const newCount = await page.locator('article[data-testid="tweet"]').count();
-      if (newCount === prevCount) break;
-    }
-
-    // Collect all tweets on the page
-    const articles = page.locator('article[data-testid="tweet"]');
-    const count = await articles.count();
+    // Helper to extract tweet data from currently visible articles.
+    // X.com uses virtual scrolling — articles leave the DOM when scrolled
+    // out of view — so we must collect data before scrolling further.
+    const seenTexts = new Set<string>();
     const tweets: TweetData[] = [];
 
-    for (let i = 0; i < count; i++) {
-      const article = articles.nth(i);
+    async function collectVisibleTweets(): Promise<void> {
+      const articles = page.locator('article[data-testid="tweet"]');
+      const count = await articles.count();
 
-      // Get the handle for this tweet
-      const handle = await article
-        .locator('a[role="link"][href*="/"]')
-        .filter({ hasText: '@' })
-        .first()
-        .textContent()
-        .catch(() => '');
+      for (let i = 0; i < count; i++) {
+        const article = articles.nth(i);
 
-      // Only include tweets from the original poster (thread by OP)
-      if (opHandle && handle && handle !== opHandle) continue;
+        const text = await article
+          .locator('[data-testid="tweetText"]')
+          .first()
+          .textContent()
+          .catch(() => '');
 
-      const author = await article
-        .locator('[data-testid="User-Name"] span')
-        .first()
-        .textContent()
-        .catch(() => '');
+        if (!text || seenTexts.has(text)) continue;
 
-      const text = await article
-        .locator('[data-testid="tweetText"]')
-        .first()
-        .textContent()
-        .catch(() => '');
+        const handle = await article
+          .locator('a[role="link"][href*="/"]')
+          .filter({ hasText: '@' })
+          .first()
+          .textContent()
+          .catch(() => '');
 
-      const time = await article
-        .locator('time')
-        .first()
-        .getAttribute('datetime')
-        .catch(() => '');
+        // Only include tweets from the original poster (thread by OP)
+        if (opHandle && handle && handle !== opHandle) continue;
 
-      if (text) {
+        const author = await article
+          .locator('[data-testid="User-Name"] span')
+          .first()
+          .textContent()
+          .catch(() => '');
+
+        const time = await article
+          .locator('time')
+          .first()
+          .getAttribute('datetime')
+          .catch(() => '');
+
+        seenTexts.add(text);
         tweets.push({
           author: author || '',
           handle: handle || '',
@@ -103,6 +100,17 @@ async function readThread(input: ReadInput): Promise<ScriptResult> {
           time: time || '',
         });
       }
+    }
+
+    // Collect initial tweets, then scroll to load more
+    await collectVisibleTweets();
+
+    for (let i = 0; i < 10; i++) {
+      const prevCount = tweets.length;
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(1500);
+      await collectVisibleTweets();
+      if (tweets.length === prevCount) break;
     }
 
     if (tweets.length === 0) {

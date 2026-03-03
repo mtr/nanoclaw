@@ -5,19 +5,32 @@
  * Override via environment variables or modify defaults here.
  */
 
+import { execFileSync } from 'child_process';
 import path from 'path';
 
 // Project root - can be overridden for different deployments
 const PROJECT_ROOT = process.env.NANOCLAW_ROOT || process.cwd();
 
+function findChrome(): string {
+  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+  if (process.platform === 'darwin') {
+    return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  }
+  // Linux: try common binary names
+  for (const bin of ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium']) {
+    try {
+      return execFileSync('which', [bin], { encoding: 'utf-8' }).trim();
+    } catch { /* not found, try next */ }
+  }
+  return 'google-chrome'; // fallback — let Playwright show a clear error
+}
+
 /**
  * Configuration object with all settings
  */
 export const config = {
-  // Chrome executable path
-  // Default: standard macOS Chrome location
-  // Override: CHROME_PATH environment variable
-  chromePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  // Chrome executable path (auto-detected per platform, override with CHROME_PATH)
+  chromePath: findChrome(),
 
   // Browser profile directory for persistent login sessions
   browserDataDir: path.join(PROJECT_ROOT, 'data', 'x-browser-profile'),

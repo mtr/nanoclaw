@@ -75,18 +75,16 @@ describe('archiveThreadFolder', () => {
     expect(fs.existsSync(srcPath)).toBe(false);
     const archivedPath = path.join(TEST_BASE, 'main', '.archived', 'my-thread');
     expect(fs.existsSync(archivedPath)).toBe(true);
-    expect(
-      fs.readFileSync(path.join(archivedPath, 'notes.md'), 'utf-8'),
-    ).toBe('important');
+    expect(fs.readFileSync(path.join(archivedPath, 'notes.md'), 'utf-8')).toBe(
+      'important',
+    );
   });
 
   it('is a no-op if source folder does not exist', () => {
     // Should not throw
     archiveThreadFolder(TEST_BASE, 'main', 'nonexistent');
     expect(
-      fs.existsSync(
-        path.join(TEST_BASE, 'main', '.archived', 'nonexistent'),
-      ),
+      fs.existsSync(path.join(TEST_BASE, 'main', '.archived', 'nonexistent')),
     ).toBe(false);
   });
 });

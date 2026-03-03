@@ -188,7 +188,8 @@ export function _setRegisteredGroups(
   registeredGroups = groups;
 }
 
-const THREAD_COMMANDS = /^\/(new|reset|threads|resume|migrate-threads|rename-thread|archive|unarchive)\b/;
+const THREAD_COMMANDS =
+  /^\/(new|reset|threads|resume|migrate-threads|rename-thread|archive|unarchive)\b/;
 
 async function handleThreadCommand(
   chatJid: string,
@@ -277,11 +278,7 @@ async function handleThreadCommand(
       : showAll
         ? 'All threads'
         : 'Threads';
-    await broadcastMessage(
-      channel,
-      chatJid,
-      `${header}:\n${lines.join('\n')}`,
-    );
+    await broadcastMessage(channel, chatJid, `${header}:\n${lines.join('\n')}`);
     return { handled: true };
   }
 
@@ -568,7 +565,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       start_timestamp: now,
     });
     ensureThreadFolder(THREAD_DOCS_DIR, group.folder, newSlug);
-    logger.info({ chatJid, threadId: newId }, 'Auto-created thread after archive');
+    logger.info(
+      { chatJid, threadId: newId },
+      'Auto-created thread after archive',
+    );
   }
 
   // Re-fetch messages using thread scope (commands may have changed the active thread)

@@ -27,16 +27,30 @@ async function runScript(script: string, args: object): Promise<ScriptResult> {
     `${script}.ts`,
   );
 
+  // Resolve npx from the same bin directory as the running Node process.
+  // This is necessary because systemd services don't inherit NVM's PATH,
+  // so bare `npx` would fail with ENOENT.
+  const nodeBinDir = path.dirname(process.execPath);
+  const npxBin = path.join(nodeBinDir, 'npx');
+
   return new Promise((resolve) => {
-    const proc = spawn('npx', ['tsx', scriptPath], {
+    const proc = spawn(npxBin, ['tsx', scriptPath], {
       cwd: process.cwd(),
-      env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
+      env: {
+        ...process.env,
+        PATH: `${nodeBinDir}:${process.env.PATH}`,
+        NANOCLAW_ROOT: process.cwd(),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     let stdout = '';
+    let stderr = '';
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
+    });
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
     });
     proc.stdin.write(JSON.stringify(args));
     proc.stdin.end();
@@ -51,7 +65,7 @@ async function runScript(script: string, args: object): Promise<ScriptResult> {
       if (code !== 0) {
         resolve({
           success: false,
-          message: `Script exited with code: ${code}`,
+          message: `Script exited with code: ${code}${stderr ? ` — ${stderr.slice(0, 300)}` : ''}`,
         });
         return;
       }
@@ -61,7 +75,7 @@ async function runScript(script: string, args: object): Promise<ScriptResult> {
       } catch {
         resolve({
           success: false,
-          message: `Failed to parse output: ${stdout.slice(0, 200)}`,
+          message: `Failed to parse output: ${stdout.slice(0, 200)}${stderr ? ` — stderr: ${stderr.slice(0, 200)}` : ''}`,
         });
       }
     });

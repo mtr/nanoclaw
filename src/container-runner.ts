@@ -223,7 +223,11 @@ function buildVolumeMounts(
 
   // Per-thread document folder (e.g., ~/Documents/Lulu/main/my-thread/)
   if (threadSlug) {
-    const threadDir = ensureThreadFolder(THREAD_DOCS_DIR, group.folder, threadSlug);
+    const threadDir = ensureThreadFolder(
+      THREAD_DOCS_DIR,
+      group.folder,
+      threadSlug,
+    );
     mounts.push({
       hostPath: threadDir,
       containerPath: '/workspace/thread',
