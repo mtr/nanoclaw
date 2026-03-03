@@ -26,6 +26,7 @@ class InputHarness(App[None]):
 
 def test_message_input_includes_escape_binding() -> None:
     keys = {binding.key for binding in MessageInput.BINDINGS}
+    assert "alt+backspace" in keys
     assert "escape" in keys
 
 
@@ -128,6 +129,18 @@ async def test_shift_enter_inserts_newline_and_enter_submits() -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert app.submitted_messages == ["hi\nthere"]
+
+
+async def test_alt_backspace_deletes_previous_word() -> None:
+    app = InputHarness()
+    async with app.run_test() as pilot:
+        message_input = app.query_one("#message-input", MessageInput)
+        message_input.focus()
+        message_input.text = "hello world"
+        message_input.action_cursor_line_end()
+
+        await pilot.press("alt+backspace")
+        assert message_input.text == "hello "
 
 
 async def test_message_input_height_grows_and_caps() -> None:

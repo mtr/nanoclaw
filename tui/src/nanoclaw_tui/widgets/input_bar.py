@@ -21,6 +21,12 @@ class MessageInput(TextArea):
     """
     BINDINGS = [
         *TextArea.BINDINGS,
+        Binding(
+            "alt+backspace",
+            "delete_word_left",
+            "Delete previous word",
+            show=False,
+        ),
         Binding("escape", "clear_message_input", "Clear input", show=False),
     ]
     MIN_VISIBLE_CONTENT_LINES = 1
