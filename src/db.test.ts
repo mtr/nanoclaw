@@ -2,13 +2,15 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   _initTestDatabase,
+  archiveThread,
   createTask,
   createThread,
-  archiveThread,
   getActiveThread,
   getThreads,
   getThreadBySlug,
+  passivateThread,
   resumeThread,
+  unarchiveThread,
   getMessagesSinceInThread,
   deleteTask,
   getAllChats,
@@ -420,10 +422,11 @@ describe('thread management', () => {
     expect(active!.id).toBe('t1');
     expect(active!.name).toBe('First Topic');
     expect(active!.slug).toBe('first-topic');
+    expect(active!.passive_at).toBeNull();
     expect(active!.archived_at).toBeNull();
   });
 
-  it('archives the active thread', () => {
+  it('passivates the active thread', () => {
     createThread({
       id: 't2',
       chat_jid: jid,
@@ -433,10 +436,14 @@ describe('thread management', () => {
       start_timestamp: '2024-01-01T00:00:00.000Z',
     });
 
-    archiveThread('t2', '2024-01-01T01:00:00.000Z');
+    passivateThread('t2', '2024-01-01T01:00:00.000Z');
 
     const active = getActiveThread(jid);
     expect(active).toBeUndefined();
+
+    const thread = getThreadBySlug(jid, 'topic-2');
+    expect(thread!.passive_at).toBe('2024-01-01T01:00:00.000Z');
+    expect(thread!.archived_at).toBeNull();
   });
 
   it('lists all threads for a group ordered by creation desc', () => {
@@ -448,7 +455,7 @@ describe('thread management', () => {
       created_at: '2024-01-01T00:00:00.000Z',
       start_timestamp: '2024-01-01T00:00:00.000Z',
     });
-    archiveThread('t3', '2024-01-01T01:00:00.000Z');
+    passivateThread('t3', '2024-01-01T01:00:00.000Z');
 
     createThread({
       id: 't4',
@@ -483,7 +490,7 @@ describe('thread management', () => {
     expect(missing).toBeUndefined();
   });
 
-  it('resumes an archived thread', () => {
+  it('resumes a passively archived thread', () => {
     createThread({
       id: 't6',
       chat_jid: jid,
@@ -492,13 +499,14 @@ describe('thread management', () => {
       created_at: '2024-01-01T00:00:00.000Z',
       start_timestamp: '2024-01-01T00:00:00.000Z',
     });
-    archiveThread('t6', '2024-01-01T01:00:00.000Z');
+    passivateThread('t6', '2024-01-01T01:00:00.000Z');
 
     resumeThread('t6');
 
     const active = getActiveThread(jid);
     expect(active).toBeDefined();
     expect(active!.id).toBe('t6');
+    expect(active!.passive_at).toBeNull();
     expect(active!.archived_at).toBeNull();
     expect(active!.end_timestamp).toBeNull();
   });
@@ -538,7 +546,7 @@ describe('thread management', () => {
     expect(msgs[0].content).toBe('inside thread');
   });
 
-  it('respects end_timestamp for archived threads', () => {
+  it('respects end_timestamp for passively archived threads', () => {
     createThread({
       id: 't8',
       chat_jid: jid,
@@ -547,7 +555,7 @@ describe('thread management', () => {
       created_at: '2024-01-01T00:00:00.000Z',
       start_timestamp: '2024-01-01T00:00:01.000Z',
     });
-    archiveThread('t8', '2024-01-01T00:00:03.000Z');
+    passivateThread('t8', '2024-01-01T00:00:03.000Z');
 
     store({
       id: 'in-window',
@@ -593,5 +601,124 @@ describe('thread management', () => {
         start_timestamp: '2024-01-01T01:00:00.000Z',
       }),
     ).toThrow();
+  });
+});
+
+// --- Explicit archive ---
+
+describe('explicit archive', () => {
+  const jid = 'group@g.us';
+
+  beforeEach(() => {
+    storeChatMetadata(jid, '2024-01-01T00:00:00.000Z');
+  });
+
+  it('archiveThread sets archived_at and passive_at on an active thread', () => {
+    createThread({
+      id: 'ea1',
+      chat_jid: jid,
+      name: 'Active Topic',
+      slug: 'active-topic',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+
+    archiveThread('ea1', '2024-01-01T02:00:00.000Z');
+
+    const thread = getThreadBySlug(jid, 'active-topic');
+    expect(thread!.archived_at).toBe('2024-01-01T02:00:00.000Z');
+    expect(thread!.passive_at).toBe('2024-01-01T02:00:00.000Z');
+    expect(thread!.end_timestamp).toBe('2024-01-01T02:00:00.000Z');
+    expect(getActiveThread(jid)).toBeUndefined();
+  });
+
+  it('archiveThread preserves existing passive_at', () => {
+    createThread({
+      id: 'ea2',
+      chat_jid: jid,
+      name: 'Passivated Topic',
+      slug: 'passivated-topic',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    passivateThread('ea2', '2024-01-01T01:00:00.000Z');
+
+    archiveThread('ea2', '2024-01-01T02:00:00.000Z');
+
+    const thread = getThreadBySlug(jid, 'passivated-topic');
+    expect(thread!.passive_at).toBe('2024-01-01T01:00:00.000Z');
+    expect(thread!.archived_at).toBe('2024-01-01T02:00:00.000Z');
+  });
+
+  it('unarchiveThread clears only archived_at', () => {
+    createThread({
+      id: 'ea3',
+      chat_jid: jid,
+      name: 'To Unarchive',
+      slug: 'to-unarchive',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    archiveThread('ea3', '2024-01-01T02:00:00.000Z');
+
+    unarchiveThread('ea3');
+
+    const thread = getThreadBySlug(jid, 'to-unarchive');
+    expect(thread!.archived_at).toBeNull();
+    // passive_at remains set — thread needs /resume to become active
+    expect(thread!.passive_at).toBe('2024-01-01T02:00:00.000Z');
+    expect(getActiveThread(jid)).toBeUndefined();
+  });
+
+  it('getThreads excludes explicitly archived by default', () => {
+    createThread({
+      id: 'ea4',
+      chat_jid: jid,
+      name: 'Visible',
+      slug: 'visible',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    createThread({
+      id: 'ea5',
+      chat_jid: jid,
+      name: 'Hidden',
+      slug: 'hidden',
+      created_at: '2024-01-01T01:00:00.000Z',
+      start_timestamp: '2024-01-01T01:00:00.000Z',
+    });
+    archiveThread('ea5', '2024-01-01T02:00:00.000Z');
+
+    const defaultList = getThreads(jid);
+    expect(defaultList).toHaveLength(1);
+    expect(defaultList[0].slug).toBe('visible');
+
+    const allList = getThreads(jid, { includeArchived: true });
+    expect(allList).toHaveLength(2);
+
+    const archivedOnly = getThreads(jid, { onlyArchived: true });
+    expect(archivedOnly).toHaveLength(1);
+    expect(archivedOnly[0].slug).toBe('hidden');
+  });
+
+  it('resumeThread clears both passive_at and archived_at', () => {
+    createThread({
+      id: 'ea6',
+      chat_jid: jid,
+      name: 'Full Resume',
+      slug: 'full-resume',
+      created_at: '2024-01-01T00:00:00.000Z',
+      start_timestamp: '2024-01-01T00:00:00.000Z',
+    });
+    archiveThread('ea6', '2024-01-01T02:00:00.000Z');
+
+    resumeThread('ea6');
+
+    const active = getActiveThread(jid);
+    expect(active).toBeDefined();
+    expect(active!.id).toBe('ea6');
+    expect(active!.passive_at).toBeNull();
+    expect(active!.archived_at).toBeNull();
+    expect(active!.end_timestamp).toBeNull();
   });
 });

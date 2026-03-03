@@ -82,7 +82,8 @@ export interface Thread {
   name: string;
   slug: string;
   created_at: string;
-  archived_at: string | null;
+  passive_at: string | null; // auto-archive via /new or /resume
+  archived_at: string | null; // explicit archive via /archive
   start_timestamp: string;
   end_timestamp: string | null;
 }

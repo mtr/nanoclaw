@@ -16,6 +16,41 @@ export function ensureThreadFolder(
 }
 
 /**
+ * Move a thread folder into the `.archived/` subdirectory.
+ * No-op if the source folder doesn't exist.
+ */
+export function archiveThreadFolder(
+  base: string,
+  groupFolder: string,
+  slug: string,
+): void {
+  const src = path.join(base, groupFolder, slug);
+  const dest = path.join(base, groupFolder, '.archived', slug);
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.renameSync(src, dest);
+}
+
+/**
+ * Restore a thread folder from `.archived/` back to the group directory.
+ * If the archived source doesn't exist, creates the destination directly.
+ */
+export function unarchiveThreadFolder(
+  base: string,
+  groupFolder: string,
+  slug: string,
+): void {
+  const src = path.join(base, groupFolder, '.archived', slug);
+  const dest = path.join(base, groupFolder, slug);
+  if (fs.existsSync(src)) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(src, dest);
+  } else {
+    fs.mkdirSync(dest, { recursive: true });
+  }
+}
+
+/**
  * Rename a thread folder from oldSlug to newSlug.
  * If the old folder doesn't exist, creates the new one.
  * Returns the new absolute path.

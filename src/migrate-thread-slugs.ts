@@ -25,7 +25,7 @@ export async function migrateExistingThreads(
   let failed = 0;
 
   for (const chatJid of chatJids) {
-    const threads = getThreads(chatJid);
+    const threads = getThreads(chatJid, { includeArchived: true });
     const existingSlugs = threads.map((t) => t.slug);
 
     for (const thread of threads) {
@@ -33,7 +33,12 @@ export async function migrateExistingThreads(
       // (4 words or fewer). Old slugs are either timestamp-based (thread-*, 20*)
       // or long truncated messages from slugify() — both need migration.
       const wordCount = thread.slug.split('-').length;
-      if (thread.slug === 'default' || (wordCount <= 5 && !thread.slug.startsWith('thread-') && !thread.slug.startsWith('20'))) {
+      if (
+        thread.slug === 'default' ||
+        (wordCount <= 5 &&
+          !thread.slug.startsWith('thread-') &&
+          !thread.slug.startsWith('20'))
+      ) {
         const groupFolder = chatJid.startsWith('cli:') ? 'cli' : 'main';
         ensureThreadFolder(THREAD_DOCS_DIR, groupFolder, thread.slug);
         continue;

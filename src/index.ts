@@ -45,12 +45,14 @@ import {
   getThreadMessageCount,
   getThreads,
   initDatabase,
+  passivateThread,
   resumeThread,
   setRegisteredGroup,
   setRouterState,
   setSession,
   storeChatMetadata,
   storeMessage,
+  unarchiveThread,
   updateThreadName,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -67,14 +69,19 @@ import {
 import { migrateExistingThreads } from './migrate-thread-slugs.js';
 import { generateThreadSlug } from './slug-generator.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { ensureThreadFolder, renameThreadFolder } from './thread-folder.js';
+import {
+  archiveThreadFolder,
+  ensureThreadFolder,
+  renameThreadFolder,
+  unarchiveThreadFolder,
+} from './thread-folder.js';
 import {
   fetchPendingMessagesForScope,
   makeUniqueThreadSlug,
   resolveHandledCommandCursor,
   ThreadCommandResult,
 } from './thread-helpers.js';
-import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import { Channel, NewMessage, RegisteredGroup, type Thread } from './types.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -181,7 +188,7 @@ export function _setRegisteredGroups(
   registeredGroups = groups;
 }
 
-const THREAD_COMMANDS = /^\/(new|reset|threads|resume|migrate-threads)\b/;
+const THREAD_COMMANDS = /^\/(new|reset|threads|resume|migrate-threads|rename-thread|archive|unarchive)\b/;
 
 async function handleThreadCommand(
   chatJid: string,
@@ -199,10 +206,10 @@ async function handleThreadCommand(
     const active = getActiveThread(chatJid);
 
     if (active) {
-      archiveThread(active.id, now);
+      passivateThread(active.id, now);
       logger.info(
         { chatJid, threadId: active.id, threadName: active.name },
-        'Thread archived',
+        'Thread passivated',
       );
     }
 
@@ -234,24 +241,47 @@ async function handleThreadCommand(
   }
 
   if (command === 'threads') {
-    const threads = getThreads(chatJid);
+    const args = content.trim().split(/\s+/).slice(1);
+    const showAll = args.includes('--all');
+    const showArchived = args.includes('--archived');
+
+    const opts = showAll
+      ? { includeArchived: true }
+      : showArchived
+        ? { onlyArchived: true }
+        : undefined;
+    const threads = getThreads(chatJid, opts);
+
     if (threads.length === 0) {
-      await broadcastMessage(
-        channel,
-        chatJid,
-        'No threads yet. Send /new to start one.',
-      );
+      const hint = showArchived
+        ? 'No archived threads.'
+        : 'No threads yet. Send /new to start one.';
+      await broadcastMessage(channel, chatJid, hint);
       return { handled: true };
     }
 
     const lines = threads.map((t, i) => {
-      const status = t.archived_at ? '' : ' (active)';
+      let status = '';
+      if (t.archived_at) {
+        status = ' (archived)';
+      } else if (!t.passive_at) {
+        status = ' (active)';
+      }
       const count = getThreadMessageCount(t.id);
       const date = t.created_at.split('T')[0];
       return `${i + 1}. ${t.slug}${status} — "${t.name}" (${date}, ${count} msgs)`;
     });
 
-    await broadcastMessage(channel, chatJid, `Threads:\n${lines.join('\n')}`);
+    const header = showArchived
+      ? 'Archived threads'
+      : showAll
+        ? 'All threads'
+        : 'Threads';
+    await broadcastMessage(
+      channel,
+      chatJid,
+      `${header}:\n${lines.join('\n')}`,
+    );
     return { handled: true };
   }
 
@@ -272,7 +302,17 @@ async function handleThreadCommand(
       return { handled: true };
     }
 
-    if (!target.archived_at) {
+    // Refuse explicitly archived threads — must /unarchive first
+    if (target.archived_at) {
+      await broadcastMessage(
+        channel,
+        chatJid,
+        `Thread "${slug}" is archived. Use /unarchive ${slug} first.`,
+      );
+      return { handled: true };
+    }
+
+    if (!target.passive_at && !target.archived_at) {
       await broadcastMessage(
         channel,
         chatJid,
@@ -284,7 +324,7 @@ async function handleThreadCommand(
     const now = new Date().toISOString();
     const active = getActiveThread(chatJid);
     if (active) {
-      archiveThread(active.id, now);
+      passivateThread(active.id, now);
     }
 
     resumeThread(target.id);
@@ -298,6 +338,102 @@ async function handleThreadCommand(
     return { handled: true, cursorTimestamp: target.start_timestamp };
   }
 
+  if (command === 'archive') {
+    const slug = content.trim().split(/\s+/)[1];
+    let target: Thread | undefined;
+
+    if (slug) {
+      target = getThreadBySlug(chatJid, slug);
+      if (!target) {
+        await broadcastMessage(
+          channel,
+          chatJid,
+          `Thread "${slug}" not found. Use /threads to list.`,
+        );
+        return { handled: true };
+      }
+    } else {
+      target = getActiveThread(chatJid);
+      if (!target) {
+        await broadcastMessage(
+          channel,
+          chatJid,
+          'No active thread to archive.',
+        );
+        return { handled: true };
+      }
+    }
+
+    if (target.archived_at) {
+      await broadcastMessage(
+        channel,
+        chatJid,
+        `Thread "${target.slug}" is already archived.`,
+      );
+      return { handled: true };
+    }
+
+    const now = new Date().toISOString();
+    archiveThread(target.id, now);
+    archiveThreadFolder(THREAD_DOCS_DIR, groupFolder, target.slug);
+    logger.info(
+      { chatJid, threadId: target.id, threadName: target.name },
+      'Thread explicitly archived',
+    );
+
+    await broadcastMessage(
+      channel,
+      chatJid,
+      `Thread "${target.name}" archived.`,
+    );
+    return { handled: true };
+  }
+
+  if (command === 'unarchive') {
+    const slug = content.trim().split(/\s+/)[1];
+    if (!slug) {
+      await broadcastMessage(
+        channel,
+        chatJid,
+        'Usage: /unarchive <slug>\nUse /threads --archived to list archived threads.',
+      );
+      return { handled: true };
+    }
+
+    const target = getThreadBySlug(chatJid, slug);
+    if (!target) {
+      await broadcastMessage(
+        channel,
+        chatJid,
+        `Thread "${slug}" not found. Use /threads --archived to list.`,
+      );
+      return { handled: true };
+    }
+
+    if (!target.archived_at) {
+      await broadcastMessage(
+        channel,
+        chatJid,
+        `Thread "${slug}" is not archived.`,
+      );
+      return { handled: true };
+    }
+
+    unarchiveThread(target.id);
+    unarchiveThreadFolder(THREAD_DOCS_DIR, groupFolder, target.slug);
+    logger.info(
+      { chatJid, threadId: target.id, threadName: target.name },
+      'Thread unarchived',
+    );
+
+    await broadcastMessage(
+      channel,
+      chatJid,
+      `Thread "${target.name}" unarchived. Use /resume ${target.slug} to activate it.`,
+    );
+    return { handled: true };
+  }
+
   if (command === 'migrate-threads') {
     const chatJids = Object.keys(registeredGroups);
     const { migrated, failed } = await migrateExistingThreads(chatJids);
@@ -305,6 +441,62 @@ async function handleThreadCommand(
       channel,
       chatJid,
       `Migration complete: ${migrated} threads migrated, ${failed} failed.`,
+    );
+    return { handled: true };
+  }
+
+  if (command === 'rename-thread') {
+    const argText = content.trim().replace(/^\/rename-thread\s*/, '');
+    if (!argText) {
+      await broadcastMessage(
+        channel,
+        chatJid,
+        'Usage: /rename-thread <new-name>\n       /rename-thread <old-slug> <new-name>',
+      );
+      return { handled: true };
+    }
+
+    const words = argText.split(/\s+/);
+    let target: Thread | undefined;
+    let newName: string;
+
+    const candidateSlug = words[0];
+    const slugMatch =
+      words.length > 1 ? getThreadBySlug(chatJid, candidateSlug) : undefined;
+
+    if (slugMatch) {
+      target = slugMatch;
+      newName = words.slice(1).join(' ');
+    } else {
+      target = getActiveThread(chatJid);
+      newName = argText;
+    }
+
+    if (!target) {
+      await broadcastMessage(
+        channel,
+        chatJid,
+        'No active thread to rename. Start one with /new.',
+      );
+      return { handled: true };
+    }
+
+    const oldSlug = target.slug;
+    const newSlug = makeUniqueThreadSlug({
+      chatJid,
+      baseName: newName,
+      findBySlug: getThreadBySlug,
+      currentThreadId: target.id,
+    });
+    const displayName = newSlug.replace(/-/g, ' ');
+
+    updateThreadName(target.id, displayName, newSlug);
+    renameThreadFolder(THREAD_DOCS_DIR, groupFolder, oldSlug, newSlug);
+
+    await broadcastMessage(
+      channel,
+      chatJid,
+      `Thread renamed: "${oldSlug}" → "${newSlug}"`,
     );
     return { handled: true };
   }
@@ -356,6 +548,29 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   }
 
+  // Auto-create a new thread if the active one was just archived and there are
+  // non-command messages still pending. This lets the conversation continue
+  // seamlessly after /archive.
+  if (
+    !getActiveThread(chatJid) &&
+    getThreads(chatJid, { includeArchived: true }).length > 0 &&
+    missedMessages.some((m) => !THREAD_COMMANDS.test(m.content.trim()))
+  ) {
+    const now = new Date().toISOString();
+    const newId = randomUUID();
+    const newSlug = now.slice(0, 16).replace(/:/g, '-');
+    createThread({
+      id: newId,
+      chat_jid: chatJid,
+      name: 'New conversation',
+      slug: newSlug,
+      created_at: now,
+      start_timestamp: now,
+    });
+    ensureThreadFolder(THREAD_DOCS_DIR, group.folder, newSlug);
+    logger.info({ chatJid, threadId: newId }, 'Auto-created thread after archive');
+  }
+
   // Re-fetch messages using thread scope (commands may have changed the active thread)
   const activeThread = getActiveThread(chatJid);
   const threadMessages = activeThread
@@ -381,7 +596,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     agentMessages.length > 0
   ) {
     const firstContent = agentMessages[0].content;
-    const existingSlugs = getThreads(chatJid).map((t) => t.slug);
+    const existingSlugs = getThreads(chatJid, { includeArchived: true }).map(
+      (t) => t.slug,
+    );
 
     const secrets = readEnvFile(['ANTHROPIC_API_KEY']);
     const apiKey = secrets.ANTHROPIC_API_KEY;
@@ -790,20 +1007,22 @@ function recoverPendingMessages(): void {
 
 function ensureDefaultThreads(): void {
   for (const chatJid of Object.keys(registeredGroups)) {
-    const active = getActiveThread(chatJid);
-    if (!active) {
-      const id = randomUUID();
-      const now = new Date().toISOString();
-      createThread({
-        id,
-        chat_jid: chatJid,
-        name: 'Default',
-        slug: 'default',
-        created_at: now,
-        start_timestamp: '',
-      });
-      logger.info({ chatJid }, 'Created default thread for group');
-    }
+    // Only create a default thread for groups with zero threads.
+    // If threads exist but are all archived, respect the user's intent.
+    const allThreads = getThreads(chatJid, { includeArchived: true });
+    if (allThreads.length > 0) continue;
+
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    createThread({
+      id,
+      chat_jid: chatJid,
+      name: 'Default',
+      slug: 'default',
+      created_at: now,
+      start_timestamp: '',
+    });
+    logger.info({ chatJid }, 'Created default thread for group');
   }
 }
 

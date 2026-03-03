@@ -102,6 +102,7 @@ function createSchema(database: Database.Database): void {
       name TEXT NOT NULL,
       slug TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      passive_at TEXT,
       archived_at TEXT,
       start_timestamp TEXT NOT NULL,
       end_timestamp TEXT,
@@ -151,6 +152,16 @@ function createSchema(database: Database.Database): void {
     );
   } catch {
     /* columns already exist */
+  }
+
+  // Rename archived_at → passive_at and add new archived_at for explicit archive
+  try {
+    database.exec(
+      `ALTER TABLE threads RENAME COLUMN archived_at TO passive_at`,
+    );
+    database.exec(`ALTER TABLE threads ADD COLUMN archived_at TEXT`);
+  } catch {
+    /* already applied */
   }
 
   // Migrate sessions table from group_folder-keyed to thread_id-keyed.
@@ -576,7 +587,7 @@ export function getAllSessions(): Record<string, string> {
 // --- Thread accessors ---
 
 export function createThread(
-  thread: Omit<Thread, 'archived_at' | 'end_timestamp'>,
+  thread: Omit<Thread, 'passive_at' | 'archived_at' | 'end_timestamp'>,
 ): void {
   db.prepare(
     `INSERT INTO threads (id, chat_jid, name, slug, created_at, start_timestamp)
@@ -591,24 +602,58 @@ export function createThread(
   );
 }
 
-export function archiveThread(threadId: string, endTimestamp: string): void {
+/** Auto-archive: marks a thread as passively archived (via /new or /resume). */
+export function passivateThread(threadId: string, endTimestamp: string): void {
   db.prepare(
-    `UPDATE threads SET archived_at = ?, end_timestamp = ? WHERE id = ?`,
+    `UPDATE threads SET passive_at = ?, end_timestamp = ? WHERE id = ?`,
   ).run(endTimestamp, endTimestamp, threadId);
+}
+
+/** Explicit archive: marks a thread as intentionally archived via /archive. */
+export function archiveThread(threadId: string, timestamp: string): void {
+  db.prepare(
+    `UPDATE threads SET archived_at = ?, end_timestamp = ?,
+     passive_at = COALESCE(passive_at, ?) WHERE id = ?`,
+  ).run(timestamp, timestamp, timestamp, threadId);
+}
+
+/** Clears explicit archive flag. Thread remains passively archived (needs /resume). */
+export function unarchiveThread(threadId: string): void {
+  db.prepare(`UPDATE threads SET archived_at = NULL WHERE id = ?`).run(
+    threadId,
+  );
 }
 
 export function getActiveThread(chatJid: string): Thread | undefined {
   return db
     .prepare(
-      `SELECT * FROM threads WHERE chat_jid = ? AND archived_at IS NULL LIMIT 1`,
+      `SELECT * FROM threads WHERE chat_jid = ? AND passive_at IS NULL AND archived_at IS NULL LIMIT 1`,
     )
     .get(chatJid) as Thread | undefined;
 }
 
-export function getThreads(chatJid: string): Thread[] {
+export function getThreads(
+  chatJid: string,
+  opts?: { includeArchived?: boolean; onlyArchived?: boolean },
+): Thread[] {
+  if (opts?.onlyArchived) {
+    return db
+      .prepare(
+        `SELECT * FROM threads WHERE chat_jid = ? AND archived_at IS NOT NULL ORDER BY created_at DESC`,
+      )
+      .all(chatJid) as Thread[];
+  }
+  if (opts?.includeArchived) {
+    return db
+      .prepare(
+        `SELECT * FROM threads WHERE chat_jid = ? ORDER BY created_at DESC`,
+      )
+      .all(chatJid) as Thread[];
+  }
+  // Default: exclude explicitly archived
   return db
     .prepare(
-      `SELECT * FROM threads WHERE chat_jid = ? ORDER BY created_at DESC`,
+      `SELECT * FROM threads WHERE chat_jid = ? AND archived_at IS NULL ORDER BY created_at DESC`,
     )
     .all(chatJid) as Thread[];
 }
@@ -623,18 +668,18 @@ export function getThreadBySlug(
 }
 
 export function resumeThread(threadId: string): void {
-  // Look up the thread to archive any other active thread for the same group
+  // Look up the thread to passivate any other active thread for the same group
   const thread = db
     .prepare(`SELECT chat_jid FROM threads WHERE id = ?`)
     .get(threadId) as { chat_jid: string } | undefined;
   if (thread) {
     const now = new Date().toISOString();
     db.prepare(
-      `UPDATE threads SET archived_at = ?, end_timestamp = ? WHERE chat_jid = ? AND archived_at IS NULL AND id != ?`,
+      `UPDATE threads SET passive_at = ?, end_timestamp = ? WHERE chat_jid = ? AND passive_at IS NULL AND archived_at IS NULL AND id != ?`,
     ).run(now, now, thread.chat_jid, threadId);
   }
   db.prepare(
-    `UPDATE threads SET archived_at = NULL, end_timestamp = NULL WHERE id = ?`,
+    `UPDATE threads SET passive_at = NULL, archived_at = NULL, end_timestamp = NULL WHERE id = ?`,
   ).run(threadId);
 }
 
